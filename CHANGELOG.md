@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-16
+
+### Added — M2 preset system + German frame localisation
+
+- **Preset system** (`src/presets/PresetManager.{h,cpp}`, `src/presets/PresetBar.{h,cpp}`),
+  ported verbatim from `basilica-audio/nave`'s pilot implementation
+  (`.scaffold/specs/preset-system-m2.md`, the binding suite-wide spec) and adapted with
+  Miserere's own plugin ID/name and factory preset content:
+  - Factory presets (`presets/factory/*.json`, embedded via BinaryData) and user presets
+    (`~/Library/Audio/Presets/Yves Vogl/Miserere/` on macOS, `%APPDATA%/Yves Vogl/Miserere/Presets/`
+    on Windows), created on demand.
+  - Save, Save As, rename, delete, next/previous (factory then user, alphabetical),
+    single-file import/export, and zip-bank import/export.
+  - Forward/backward-tolerant JSON import: unknown parameter IDs are ignored, missing IDs
+    keep their current default, a wrong `plugin`/`format` tag refuses the import with a
+    friendly, localised error.
+  - Default resolution: a fresh instance loads a user `Default` preset if one exists,
+    otherwise the factory `Default` preset (`applyStartupDefault()`, called once from the
+    processor constructor); "Set current as default"/"Reset default" write/delete that user
+    file.
+  - `PresetBar`: a horizontal strip docked at the top of the editor
+    (`[<] [PresetName*] [>] [Save] [Save As...] [Delete] [Import...] [Export...]`), with a
+    Factory/User preset menu and a dirty-state `*` indicator - deliberately plain per the
+    spec's "M3 restyles it, do not gold-plate" note.
+- **10 factory presets** (`docs/presets.md` documents each one's intent): **Default** (Init -
+  the certified out-of-the-box state, also the M2 default-resolution target), **Classic
+  Parallel Blend** (the documented 2010s template's canonical fader recipe, driven hard enough
+  to be genuinely audible), **Crush Forward** / **Silk Sandwich** / **Gentle Bus** (isolate
+  one parallel bus at a time with the other three muted), **Wide & Wet** (Spread + Slap
+  showcased together), **Direct Channel Only** (the serial path's optional sections on, all
+  four returns muted), **Rough Mix Glue** (light, balanced touch of all four busses),
+  **Whisper Thicken** (thin/quiet-vocal thickening via Spread/Slap with light Crush/Sandwich
+  control), and **Aggressive Rock Vocal** (the full direct-path-plus-parallel-bus chain
+  leaned in hard). No brand or person names anywhere.
+- **German frame localisation** (`resources/i18n/de.txt`, embedded via BinaryData, ported
+  verbatim from nave): every `PresetBar`/`PresetManager` user-facing frame string (button
+  labels, menu items, dialog text, error messages) is wrapped in JUCE's `TRANS()` and
+  auto-selected via `SystemStats::getUserLanguage()` at editor construction (`de*` → German,
+  else English, no user-facing language switch yet). Parameter names, units and DSP
+  terminology (Attack, Release, Threshold, Ratio, Mix, Level, Drive, Hz, dB, %, ...) are never
+  translated anywhere in the plugin.
+- 20 new Catch2 test cases: 17 in `tests/PresetManagerTests.cpp` (save/load round-trip,
+  forward/backward-compat import tolerance, wrong-plugin/wrong-format import refusal, every
+  factory preset parses/loads and stays parameter-plausible, the three-way default-resolution
+  order, the dirty-flag lifecycle, prev/next wrap-around, rename/delete guards, single-file and
+  zip-bank import/export round-trips, and dirty-tracking coexisting safely with real-time
+  `processBlock()` calls) and 3 in `tests/LocalisationTests.cpp` (`de.txt` parses as a
+  well-formed German `LocalisedStrings` mapping, every `PresetBar`/`PresetManager` frame key
+  has a translation, and a representative sample of DSP/parameter terminology is verifiably
+  absent from the mapping) - all isolated from the real per-user preset directory via
+  `PresetManagerConfig::userPresetsDirectoryOverrideForTests`. 122 tests total, all green.
+
 ## [0.2.0] — 2026-07-16
 
 ### Changed — topology rewrite (v1 → v2, breaking)

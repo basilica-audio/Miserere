@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "presets/PresetBar.h"
+
 class MiserereAudioProcessor;
 
 // A simple, functional v0.1 editor (the suite standard for M1): one rotary
@@ -64,6 +66,13 @@ private:
     Section& addSection (const juce::String& headerText);
 
     MiserereAudioProcessor& audioProcessor;
+
+    // M2 preset system (src/presets/PresetBar.h) - a horizontal strip
+    // docked at the top of the editor. Constructed after the localisation
+    // frame is installed (see the constructor) so its TRANS()'d strings
+    // (and any of its own dialogs opened later) pick up the right language
+    // from the very first paint.
+    basilica::presets::PresetBar presetBar;
 
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Choice>> choices;
