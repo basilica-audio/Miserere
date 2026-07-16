@@ -39,8 +39,16 @@ namespace
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { muteId, 1 }, labelPrefix + " Mute", false));
 
+        // Audition is a META parameter: engaging one bus's audition releases
+        // the other three via the exclusivity listener in PluginProcessor,
+        // i.e. changing THIS parameter changes OTHER parameters' values. AU
+        // validation (auval) requires the meta flag on any such parameter
+        // ("Parameter values are different since last set - probable cause:
+        // a Meta Param Flag is NOT set...") - JUCE 8.0.14,
+        // RangedAudioParameterAttributes::withMeta.
         layout.add (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { auditionId, 1 }, labelPrefix + " Audition", false));
+            juce::ParameterID { auditionId, 1 }, labelPrefix + " Audition", false,
+            juce::AudioParameterBoolAttributes().withMeta (true)));
     }
 
     // Adds a Passive EQ instance's eight-parameter surface (LF boost/cut, HF
