@@ -1,38 +1,50 @@
 #pragma once
 
+#include "RealtimeCoefficients.h"
+#include "TapeSaturator.h"
+
 #include <juce_dsp/juce_dsp.h>
 
-// Bus B's opto-style leveler: program-dependent two-stage release (~60 ms
-// fast stage into ~600 ms slow stage, release slows with sustained GR),
-// soft ~3:1 effective ratio, fixed ~10 ms attack, Peak Reduction 0-100%,
-// makeup (brief).
+// The middle of the SANDWICH bus's Passive EQ -> Opto Leveler -> Passive EQ
+// (docs/design-brief.md): a photocell-style leveler.
 //
-// The optical-cell character is modelled with two coupled mechanisms:
+// Modelled behaviours (see docs/research-notes.md for the sourced findings):
 //
-// 1. Gain-domain ballistics: the target gain reduction (from a soft 3:1
-//    curve over a Peak-Reduction-derived threshold) is smoothed in the dB
-//    domain with a fixed ~10 ms attack and a *variable* release.
+// - **Raw-audio detector, no rectifier smoothing**: there is no sidechain
+//   low-pass "level detector" ahead of the cell model - the (optionally
+//   emphasis-filtered) raw audio drives the photocell response directly,
+//   consistent with the hardware ("rectification and filtering ... are not
+//   necessary"). All attack ballistics live in the photocell model itself.
+// - **Two-stage release with memory**: modelled as 3 parallel one-pole
+//   "cell conductance" followers, EACH with its own attack AND release time
+//   constant (not a shared attack): a fast path (~10 ms attack, ~60 ms
+//   release - the documented "50% recovery" stage) charges on any transient;
+//   a mid path (~0.3 s attack, ~2 s release) and a slow path (~1.2 s attack,
+//   ~10 s release) only build up meaningful level after SUSTAINED material -
+//   a brief burst barely charges them at all. Taking the MAX of the three
+//   paths reproduces the fast-then-slow release shape and the GR-history
+//   dependence in one mechanism: after a short GR event only the fast path
+//   was ever charged, so release is fast; after sustained GR the slower
+//   paths have caught up too and dominate the max() long after the fast
+//   path has decayed away, carrying a much longer tail - this IS the
+//   "release grows with amount/duration of previous reduction" behaviour,
+//   without a separate history accumulator.
+// - **Static curve = lookup, not a fixed ratio**: breakaway at -30 dB, a
+//   soft-knee region (~3:1, ~10:1 with Limit engaged) up to -20 dB, then a
+//   hard ceiling (<1 dB of output change for +20 dB more input).
+// - **Detector-only emphasis**: a low-shelf CUT of up to -10 dB below
+//   ~1 kHz applied to the detector copy only (never the audio path) makes
+//   the leveler progressively more HF-selective ("like a multiband") as
+//   `sand_emphasis` rises.
+// - **Clean GR element, coloured makeup**: the attenuation itself is
+//   distortion-free; a small, always-on, level-dependent tube/transformer-
+//   style nonlinearity sits after the gain multiply.
 //
-// 2. Light-history memory: a slow accumulator integrates how much gain
-//    reduction has been applied recently (the "how long has the LED been
-//    bright" state of a real opto cell). The release time interpolates
-//    from the fast stage (~60 ms, cold cell / short transient GR) to the
-//    slow stage (~600 ms, hot cell / sustained GR) as the history builds -
-//    so a brief peak recovers quickly while material that has been leaning
-//    on the leveler for a while releases lazily. This is the two-stage,
-//    program-dependent release the brief specifies and the M1 guarantee
-//    tests ("release measurably slows with longer GR history").
+// Minimum-phase/causal, zero added latency (no lookahead, no oversampling) -
+// keeps the SANDWICH bus sample-aligned with the Direct path.
 //
-// Peak Reduction == 0% is a BIT-EXACT bypass: the threshold sits at 0 dB
-// and the ratio at 1:1, and process() skips the gain multiply entirely (the
-// detector/history state still advances so engaging reduction mid-stream
-// starts from a settled state). Makeup at 0 dB multiplies by exactly 1.0f.
-//
-// Zero latency (causal envelope, no lookahead), pure gain multiply - Bus B
-// stays sample-aligned per the parallel-bus phase discipline.
-//
-// Detection is per-channel independent (not stereo-linked) - the same
-// acceptable v0.1 simplification as the suite's other hand-rolled dynamics.
+// Stereo detection defaults to UNLINKED; setLinked(true) mirrors FetCrush's
+// combined-envelope behaviour.
 class OptoLeveler
 {
 public:
@@ -41,11 +53,19 @@ public:
     void prepare (const juce::dsp::ProcessSpec& spec);
     void reset();
 
-    // 0-1 (0-100%). 0 is a bit-exact bypass; 1 pulls the threshold down to
-    // thresholdMinDb and the effective ratio up to maxRatio (~3:1).
+    // Drive into the fixed static curve (0-100%, mapped internally to an
+    // input gain) - the hardware's Peak Reduction control is itself an
+    // input gain into the cell, not a threshold (see class comment).
     void setPeakReductionProportion (float newAmount01) noexcept;
 
-    void setMakeupDb (float newMakeupDb) noexcept { makeupGainLinear = juce::Decibels::decibelsToGain (newMakeupDb); }
+    void setLimitEnabled (bool shouldBeEnabled) noexcept { limitEnabled = shouldBeEnabled; }
+
+    // 0-1 (0-100%): detector-only HF-selective emphasis (0 = flat/equal GR
+    // at all frequencies, 1 = up to -10 dB shelf cut below ~1 kHz in the
+    // detector).
+    void setEmphasisProportion (float newAmount01) noexcept { emphasisAmount = juce::jlimit (0.0f, 1.0f, newAmount01); }
+
+    void setLinked (bool shouldBeLinked) noexcept { linked = shouldBeLinked; }
 
     // Processes `block` in place. A zero-sample block is a safe no-op. No
     // allocation occurs here.
@@ -55,27 +75,59 @@ public:
     // channels in the last processed block - exposed for metering/tests.
     float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb; }
 
+    // Exposed for direct unit testing of the static curve independent of
+    // the envelope dynamics.
+    static float staticCurveOutputDb (float levelDb, bool limitEnabled) noexcept;
+
 private:
-    static constexpr float thresholdMinDb = -32.0f; // threshold at Peak Reduction == 100%
-    static constexpr float maxRatio = 3.0f;          // soft ~3:1 effective ratio (brief)
-    static constexpr double attackTimeSeconds = 0.010;      // ~10 ms fixed (brief)
-    static constexpr double fastReleaseSeconds = 0.060;     // fast stage (brief: ~60 ms)
-    static constexpr double slowReleaseSeconds = 0.600;     // slow stage (brief: ~600 ms)
-    static constexpr double detectorTimeSeconds = 0.005;    // RMS-ish level detector, faster than the gain ballistics
-    static constexpr double historyTimeSeconds = 1.5;       // light-history integration time
-    static constexpr float historyFullScaleGrDb = 6.0f;     // GR (dB) that saturates the history toward the slow stage
+    static constexpr float breakawayDb = -30.0f;
+    static constexpr float kneeRegionDb = 10.0f;    // breakaway .. breakaway+kneeRegionDb is the soft-knee zone
+    static constexpr float normalKneeRatio = 3.0f;
+    static constexpr float limitKneeRatio = 10.0f;
+    static constexpr float ceilingRatio = 25.0f;     // 20 dB more input -> 0.8 dB more output (< 1 dB, brief)
+
+    // Per-path attack/release time constants - see class comment. Each path
+    // is a plain one-pole follower of the (emphasis-filtered) rectified
+    // signal; only the fast path reacts to brief transients, so the mid/
+    // slow paths' contribution to the max() genuinely depends on how long
+    // the signal has been loud, not just how loud the peak was.
+    static constexpr double fastAttackSeconds = 0.010;   // "~10 ms effective" (the photocell's own attack)
+    static constexpr double fastReleaseSeconds = 0.060;  // "50% recovery" stage
+    static constexpr double midAttackSeconds = 0.3;
+    static constexpr double midReleaseSeconds = 2.0;
+    static constexpr double slowAttackSeconds = 1.2;
+    static constexpr double slowReleaseSeconds = 10.0;
+
+    static constexpr float emphasisFreqHz = 1000.0f;
+    static constexpr float emphasisMaxCutDb = 10.0f;
+    static constexpr float emphasisShelfQ = 0.5f;
+
+    static constexpr float postAttenuatorDriveLinear = 1.15f; // gentle fixed tube/transformer coloration (~1.2 dB)
+
     static constexpr double smoothingTimeSeconds = 0.05;
+    static constexpr double driveSmoothingTimeSeconds = 0.05;
 
     double sampleRate = 44100.0;
 
-    std::vector<float> detectorState;   // per-channel squared-signal envelope
-    std::vector<float> grSmoothedDb;    // per-channel smoothed gain reduction (dB domain)
-    std::vector<float> historyState;    // per-channel light-history accumulator, 0..1
+    // Per-channel: three parallel release-stage envelopes, max()'d together
+    // - see class comment.
+    std::vector<float> fastPathState;
+    std::vector<float> midPathState;
+    std::vector<float> slowPathState;
 
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> amountSmoothed;
+    // Emphasis detector filter (per channel, detector-only - never applied
+    // to the audio path).
+    std::vector<juce::dsp::IIR::Filter<float>> emphasisFilters;
+    juce::dsp::IIR::Coefficients<float>::Ptr emphasisCoefficients { msrr::makeIdentityBiquad() };
+
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> driveSmoothed;
 
     float lastAmount01 = 0.4f;
-    float makeupGainLinear = 1.0f;
+    bool limitEnabled = false;
+    float emphasisAmount = 1.0f;
+    bool linked = false;
+
+    float postAttenuatorCompensation = 1.0f;
 
     float currentGainReductionDb = 0.0f;
 

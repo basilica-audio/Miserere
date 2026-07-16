@@ -6,33 +6,42 @@
 #include <catch2/catch_test_macros.hpp>
 
 // Layout-contract tests: every frozen ID exists, the choice parameters
-// carry exactly the strings the brief specifies (in the shared-table order
-// PluginProcessor maps back to Hz/ratio values), and the out-of-the-box
-// defaults implement the "Direct chain only until you push a fader up"
-// design.
+// carry the brief's selections in the shared-table order PluginProcessor
+// maps back to Hz/enum values, and the out-of-the-box defaults implement
+// the v2 design (direct path fully off, return busses at the brief's
+// specified -9/-12/-18/-15 dB levels, unlinked detection).
 TEST_CASE ("Every frozen parameter ID exists in the layout", "[parameters]")
 {
     MiserereAudioProcessor processor;
 
     static constexpr const char* allIds[] = {
-        ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass,
-        ParamIDs::busAHpfEnabled, ParamIDs::busAHpfFreq,
-        ParamIDs::busAEqLowGain, ParamIDs::busAEqMidFreq, ParamIDs::busAEqMidGain,
-        ParamIDs::busAEqMidQ, ParamIDs::busAEqHighGain,
-        ParamIDs::busACompRatio, ParamIDs::busACompThreshold, ParamIDs::busACompAttack,
-        ParamIDs::busACompRelease, ParamIDs::busACompMakeup,
-        ParamIDs::busADeessEnabled, ParamIDs::busADeessFreq, ParamIDs::busADeessThreshold,
-        ParamIDs::busASatDrive,
-        ParamIDs::busALevel, ParamIDs::busAMute, ParamIDs::busASolo,
-        ParamIDs::busBLowBoostFreq, ParamIDs::busBLowBoostGain,
-        ParamIDs::busBHighBoostFreq, ParamIDs::busBHighBoostGain,
-        ParamIDs::busBOptoReduction, ParamIDs::busBOptoMakeup, ParamIDs::busBAirGain,
-        ParamIDs::busBLevel, ParamIDs::busBMute, ParamIDs::busBSolo,
-        ParamIDs::busCAttack, ParamIDs::busCRelease, ParamIDs::busCDrive, ParamIDs::busCOutputTrim,
-        ParamIDs::busCLevel, ParamIDs::busCMute, ParamIDs::busCSolo,
-        ParamIDs::busDDelayMs, ParamIDs::busDFeedback, ParamIDs::busDHpFreq, ParamIDs::busDLpFreq,
-        ParamIDs::busDMono,
-        ParamIDs::busDLevel, ParamIDs::busDMute, ParamIDs::busDSolo,
+        ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass, ParamIDs::link, ParamIDs::parallelTrim,
+
+        ParamIDs::directDeessPreEnabled, ParamIDs::directDeessPreFreq, ParamIDs::directDeessPreThreshold,
+        ParamIDs::directFetEnabled, ParamIDs::directFetThreshold, ParamIDs::directFetAttack,
+        ParamIDs::directFetRelease, ParamIDs::directFetMakeup,
+        ParamIDs::directEqHpfEnabled, ParamIDs::directEqHpfFreq, ParamIDs::directEqLowFreq, ParamIDs::directEqLowGain,
+        ParamIDs::directEqMidFreq, ParamIDs::directEqMidGain, ParamIDs::directEqHighGain, ParamIDs::directEqDrive,
+        ParamIDs::directSatDrive,
+        ParamIDs::directDeessPostEnabled, ParamIDs::directDeessPostFreq, ParamIDs::directDeessPostThreshold,
+
+        ParamIDs::crushInput, ParamIDs::crushRatio, ParamIDs::crushStyle, ParamIDs::crushAttack,
+        ParamIDs::crushRelease, ParamIDs::crushOutput, ParamIDs::crushLevel, ParamIDs::crushMute, ParamIDs::crushAudition,
+
+        ParamIDs::sandPreLfFreq, ParamIDs::sandPreLfBoost, ParamIDs::sandPreLfCut,
+        ParamIDs::sandPreHfBellFreq, ParamIDs::sandPreHfBellBoost, ParamIDs::sandPreHfBellBandwidth,
+        ParamIDs::sandPreHfShelfFreq, ParamIDs::sandPreHfShelfAtten,
+        ParamIDs::sandPeakRed, ParamIDs::sandLimit, ParamIDs::sandEmphasis, ParamIDs::sandResidual,
+        ParamIDs::sandPostLfFreq, ParamIDs::sandPostLfBoost, ParamIDs::sandPostLfCut,
+        ParamIDs::sandPostHfBellFreq, ParamIDs::sandPostHfBellBoost, ParamIDs::sandPostHfBellBandwidth,
+        ParamIDs::sandPostHfShelfFreq, ParamIDs::sandPostHfShelfAtten,
+        ParamIDs::sandLevel, ParamIDs::sandMute, ParamIDs::sandAudition,
+
+        ParamIDs::spreadDetune, ParamIDs::spreadTime, ParamIDs::spreadWidth,
+        ParamIDs::spreadLevel, ParamIDs::spreadMute, ParamIDs::spreadAudition,
+
+        ParamIDs::slapTime, ParamIDs::slapStereo, ParamIDs::slapTone,
+        ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition,
     };
 
     for (const auto* id : allIds)
@@ -58,24 +67,30 @@ TEST_CASE ("Choice parameters carry the brief's selections in shared-table order
             CHECK (param->choices[i] == expected[i]);
     };
 
-    checkChoices (ParamIDs::busACompRatio, msrr::compRatioChoices);
-    checkChoices (ParamIDs::busBLowBoostFreq, msrr::busBLowBoostFreqChoices);
-    checkChoices (ParamIDs::busBHighBoostFreq, msrr::busBHighBoostFreqChoices);
+    checkChoices (ParamIDs::crushRatio, msrr::crushRatioChoices);
+    checkChoices (ParamIDs::crushStyle, msrr::crushStyleChoices);
+    checkChoices (ParamIDs::directEqHpfFreq, msrr::eqHpfFreqChoices);
+    checkChoices (ParamIDs::directEqLowFreq, msrr::eqLowFreqChoices);
+    checkChoices (ParamIDs::directEqMidFreq, msrr::eqMidFreqChoices);
+    checkChoices (ParamIDs::sandPreLfFreq, msrr::sandLfFreqChoices);
+    checkChoices (ParamIDs::sandPreHfBellFreq, msrr::sandHfBellFreqChoices);
+    checkChoices (ParamIDs::sandPreHfShelfFreq, msrr::sandHfShelfFreqChoices);
 
-    // The value tables must line up 1:1 with the string lists.
-    CHECK (msrr::compRatioChoices.size() == static_cast<int> (msrr::compRatioValues.size()));
-    CHECK (msrr::busBLowBoostFreqChoices.size() == static_cast<int> (msrr::busBLowBoostFreqHz.size()));
-    CHECK (msrr::busBHighBoostFreqChoices.size() == static_cast<int> (msrr::busBHighBoostFreqHz.size()));
+    CHECK (msrr::crushRatioChoices.size() == 5);
+    CHECK (msrr::eqHpfFreqChoices.size() == static_cast<int> (msrr::eqHpfFreqHz.size()));
+    CHECK (msrr::eqLowFreqChoices.size() == static_cast<int> (msrr::eqLowFreqHz.size()));
+    CHECK (msrr::eqMidFreqChoices.size() == static_cast<int> (msrr::eqMidFreqHz.size()));
+    CHECK (msrr::sandLfFreqChoices.size() == static_cast<int> (msrr::sandLfFreqHz.size()));
+    CHECK (msrr::sandHfBellFreqChoices.size() == static_cast<int> (msrr::sandHfBellFreqHz.size()));
+    CHECK (msrr::sandHfShelfFreqChoices.size() == static_cast<int> (msrr::sandHfShelfFreqHz.size()));
 
-    CHECK (msrr::compRatioValues[0] == 4.0f);
-    CHECK (msrr::compRatioValues[1] == 8.0f);
-    CHECK (msrr::busBLowBoostFreqHz[0] == 60.0f);
-    CHECK (msrr::busBLowBoostFreqHz[1] == 100.0f);
-    CHECK (msrr::busBHighBoostFreqHz[0] == 8000.0f);
-    CHECK (msrr::busBHighBoostFreqHz[3] == 16000.0f);
+    CHECK (msrr::eqHpfFreqHz[0] == 50.0f);
+    CHECK (msrr::eqHpfFreqHz[3] == 300.0f);
+    CHECK (msrr::sandLfFreqHz[3] == 100.0f);
+    CHECK (msrr::sandHfBellFreqHz[0] == 3000.0f);
 }
 
-TEST_CASE ("Defaults: Direct bus at unity, parallel busses at the fader floor", "[parameters][defaults]")
+TEST_CASE ("Defaults: direct path fully off, return busses at the brief's specified levels", "[parameters][defaults]")
 {
     MiserereAudioProcessor processor;
 
@@ -86,17 +101,37 @@ TEST_CASE ("Defaults: Direct bus at unity, parallel busses at the fader floor", 
         return param->convertFrom0to1 (param->getValue());
     };
 
-    // margin: convertFrom0to1 quantisation leaves ~1e-6 dB of rounding.
-    CHECK (realValue (ParamIDs::busALevel) == Catch::Approx (0.0f).margin (1.0e-4));
-    CHECK (realValue (ParamIDs::busBLevel) == Catch::Approx (-60.0f));
-    CHECK (realValue (ParamIDs::busCLevel) == Catch::Approx (-60.0f));
-    CHECK (realValue (ParamIDs::busDLevel) == Catch::Approx (-60.0f));
+    // Direct path: every optional section defaults OFF - the "bit-
+    // transparent wire" invariant.
+    for (const auto* id : { ParamIDs::directDeessPreEnabled, ParamIDs::directFetEnabled,
+                             ParamIDs::directEqHpfEnabled, ParamIDs::directDeessPostEnabled })
+    {
+        INFO ("parameter id = " << id);
+        CHECK (processor.apvts.getParameter (id)->getValue() < 0.5f);
+    }
 
-    CHECK (realValue (ParamIDs::busDDelayMs) == Catch::Approx (110.0f)); // brief's default slap time
+    for (const auto* id : { ParamIDs::directEqLowGain, ParamIDs::directEqMidGain, ParamIDs::directEqHighGain,
+                             ParamIDs::directEqDrive, ParamIDs::directSatDrive })
+    {
+        INFO ("parameter id = " << id);
+        CHECK (realValue (id) == Catch::Approx (0.0f).margin (1.0e-3));
+    }
 
-    // No mute/solo engaged out of the box.
-    for (const auto* id : { ParamIDs::busAMute, ParamIDs::busBMute, ParamIDs::busCMute, ParamIDs::busDMute,
-                             ParamIDs::busASolo, ParamIDs::busBSolo, ParamIDs::busCSolo, ParamIDs::busDSolo,
+    // Return busses: the brief's specified defaults (-9/-12/-18/-15 dB).
+    CHECK (realValue (ParamIDs::crushLevel) == Catch::Approx (-9.0f).margin (1.0e-3));
+    CHECK (realValue (ParamIDs::sandLevel) == Catch::Approx (-12.0f).margin (1.0e-3));
+    CHECK (realValue (ParamIDs::spreadLevel) == Catch::Approx (-18.0f).margin (1.0e-3));
+    CHECK (realValue (ParamIDs::slapLevel) == Catch::Approx (-15.0f).margin (1.0e-3));
+
+    CHECK (realValue (ParamIDs::slapTime) == Catch::Approx (110.0f)); // brief's default slap time
+    CHECK (realValue (ParamIDs::spreadDetune) == Catch::Approx (6.0f)); // brief's default detune
+
+    // Unlinked by default ("dual mono is key").
+    CHECK (processor.apvts.getParameter (ParamIDs::link)->getValue() < 0.5f);
+
+    // No mute/audition/bypass engaged out of the box.
+    for (const auto* id : { ParamIDs::crushMute, ParamIDs::sandMute, ParamIDs::spreadMute, ParamIDs::slapMute,
+                             ParamIDs::crushAudition, ParamIDs::sandAudition, ParamIDs::spreadAudition, ParamIDs::slapAudition,
                              ParamIDs::bypass })
     {
         INFO ("parameter id = " << id);

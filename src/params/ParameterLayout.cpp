@@ -5,8 +5,8 @@ namespace
 {
     // True logarithmic (base-10) mapping for frequency/time parameters, so
     // slider/knob travel spends equal space per octave/decade rather than
-    // per linear unit - matches the convention used across the suite
-    // (see e.g. triptych's/seraph's ParameterLayout.cpp). Uses
+    // per linear unit - matches the convention used across the suite (see
+    // e.g. triptych's/seraph's ParameterLayout.cpp). Uses
     // juce::mapToLog10/mapFromLog10 rather than NormalisableRange's built-in
     // power-law skew, which only approximates a log curve.
     juce::NormalisableRange<float> makeLogRange (float rangeMin, float rangeMax)
@@ -20,18 +20,14 @@ namespace
             { return juce::mapFromLog10 (value, start, end); });
     }
 
-    // Adds a bus's Level/Mute/Solo triple. Level's range floor (-60 dB)
-    // stands in for "-inf" per the design brief's "-inf...+6 dB fader" -
-    // -60 dB is well below the noise floor of any realistic use case, so it
-    // is a practically-silent floor without the extra complexity of a
-    // special-cased "-inf" display/quantity. Mute/Solo default to false so
-    // enabling this triple never changes existing default behaviour.
-    void addLevelMuteSolo (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
-                            const char* levelId,
-                            const char* muteId,
-                            const char* soloId,
-                            const juce::String& labelPrefix,
-                            float defaultLevelDb)
+    // Adds a bus's Level/Mute/Audition triple. Level's range floor (-60 dB)
+    // stands in for "-inf" per the design brief's "-60...+6 dB fader".
+    void addLevelMuteAudition (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
+                                const char* levelId,
+                                const char* muteId,
+                                const char* auditionId,
+                                const juce::String& labelPrefix,
+                                float defaultLevelDb)
     {
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { levelId, 1 },
@@ -43,27 +39,79 @@ namespace
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { muteId, 1 }, labelPrefix + " Mute", false));
 
+        // Audition is a META parameter: engaging one bus's audition releases
+        // the other three via the exclusivity listener in PluginProcessor,
+        // i.e. changing THIS parameter changes OTHER parameters' values. AU
+        // validation (auval) requires the meta flag on any such parameter
+        // ("Parameter values are different since last set - probable cause:
+        // a Meta Param Flag is NOT set...") - JUCE 8.0.14,
+        // RangedAudioParameterAttributes::withMeta.
         layout.add (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { soloId, 1 }, labelPrefix + " Solo", false));
+            juce::ParameterID { auditionId, 1 }, labelPrefix + " Audition", false,
+            juce::AudioParameterBoolAttributes().withMeta (true)));
+    }
+
+    // Adds a Passive EQ instance's eight-parameter surface (LF boost/cut, HF
+    // bell boost/bandwidth, HF shelf atten - see PassiveEq.h), used four
+    // times (Sandwich pre/post).
+    void addPassiveEqParams (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
+                              const char* lfFreqId, const char* lfBoostId, const char* lfCutId,
+                              const char* hfBellFreqId, const char* hfBellBoostId, const char* hfBellBandwidthId,
+                              const char* hfShelfFreqId, const char* hfShelfAttenId,
+                              const juce::String& labelPrefix,
+                              int lfFreqDefaultIndex, float lfBoostDefault, float lfCutDefault,
+                              int hfBellFreqDefaultIndex, float hfBellBoostDefault, float hfBellBandwidthDefault,
+                              int hfShelfFreqDefaultIndex, float hfShelfAttenDefault)
+    {
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { lfFreqId, 1 }, labelPrefix + " LF Freq", msrr::sandLfFreqChoices, lfFreqDefaultIndex));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { lfBoostId, 1 }, labelPrefix + " LF Boost",
+            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), lfBoostDefault));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { lfCutId, 1 }, labelPrefix + " LF Cut",
+            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), lfCutDefault));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { hfBellFreqId, 1 }, labelPrefix + " HF Bell Freq", msrr::sandHfBellFreqChoices, hfBellFreqDefaultIndex));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { hfBellBoostId, 1 }, labelPrefix + " HF Bell Boost",
+            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), hfBellBoostDefault));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { hfBellBandwidthId, 1 }, labelPrefix + " HF Bell Bandwidth",
+            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), hfBellBandwidthDefault));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { hfShelfFreqId, 1 }, labelPrefix + " HF Shelf Freq", msrr::sandHfShelfFreqChoices, hfShelfFreqDefaultIndex));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { hfShelfAttenId, 1 }, labelPrefix + " HF Shelf Atten",
+            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), hfShelfAttenDefault));
     }
 }
 
 namespace msrr
 {
-    // Bus B's Passive EQ In frequency selects (brief: "Low Boost (60/100 Hz
-    // sel...)", "High Boost (8/10/12/16 kHz sel...)"). Kept as free functions/
-    // arrays (not local statics inside createParameterLayout()) so
-    // PluginProcessor.cpp can map a chosen AudioParameterChoice index back to
-    // its concrete Hz value without duplicating the list.
-    const juce::StringArray busBLowBoostFreqChoices { "60 Hz", "100 Hz" };
-    const juce::StringArray busBHighBoostFreqChoices { "8 kHz", "10 kHz", "12 kHz", "16 kHz" };
+    const juce::StringArray crushRatioChoices { "4:1", "8:1", "12:1", "20:1", "ALL" };
+    const juce::StringArray crushStyleChoices { "All-Buttons", "Gentle" };
 
-    const std::array<float, 2> busBLowBoostFreqHz { 60.0f, 100.0f };
-    const std::array<float, 4> busBHighBoostFreqHz { 8000.0f, 10000.0f, 12000.0f, 16000.0f };
+    const juce::StringArray eqHpfFreqChoices { "50 Hz", "80 Hz", "160 Hz", "300 Hz" };
+    const std::array<float, 4> eqHpfFreqHz { 50.0f, 80.0f, 160.0f, 300.0f };
+    const juce::StringArray eqLowFreqChoices { "35 Hz", "60 Hz", "110 Hz", "220 Hz" };
+    const std::array<float, 4> eqLowFreqHz { 35.0f, 60.0f, 110.0f, 220.0f };
+    const juce::StringArray eqMidFreqChoices { "360 Hz", "700 Hz", "1.6 kHz", "3.2 kHz", "4.8 kHz", "7.2 kHz" };
+    const std::array<float, 6> eqMidFreqHz { 360.0f, 700.0f, 1600.0f, 3200.0f, 4800.0f, 7200.0f };
 
-    // Bus A FET Comp ratio choice (brief: "ratio {4:1, 8:1}").
-    const juce::StringArray compRatioChoices { "4:1", "8:1" };
-    const std::array<float, 2> compRatioValues { 4.0f, 8.0f };
+    const juce::StringArray sandLfFreqChoices { "20 Hz", "30 Hz", "60 Hz", "100 Hz" };
+    const std::array<float, 4> sandLfFreqHz { 20.0f, 30.0f, 60.0f, 100.0f };
+    const juce::StringArray sandHfBellFreqChoices { "3 kHz", "4 kHz", "5 kHz", "8 kHz", "10 kHz", "12 kHz", "16 kHz" };
+    const std::array<float, 7> sandHfBellFreqHz { 3000.0f, 4000.0f, 5000.0f, 8000.0f, 10000.0f, 12000.0f, 16000.0f };
+    const juce::StringArray sandHfShelfFreqChoices { "5 kHz", "10 kHz", "20 kHz" };
+    const std::array<float, 3> sandHfShelfFreqHz { 5000.0f, 10000.0f, 20000.0f };
 
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     {
@@ -88,253 +136,258 @@ namespace msrr
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
 
+        // Unlinked (independent L/R detectors) is the default - "dual mono
+        // is key" (design brief).
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::link, 1 }, "Link", false));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::parallelTrim, 1 },
+            "Parallel",
+            juce::NormalisableRange<float> (-24.0f, 6.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
         //======================================================================
-        // Bus A - Direct chain
+        // Direct path - every section optional, ALL OFF by default (the
+        // "bit-transparent wire" invariant).
         layout.add (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { ParamIDs::busAHpfEnabled, 1 }, "Direct HPF Enabled", true));
-
-        // HPF: 20-300 Hz, 12 dB/oct (brief). Default 80 Hz, a typical vocal
-        // rumble-clearing setting; the null test explicitly disables the HPF
-        // (busA_hpfEnabled = false) rather than relying on a "neutral"
-        // frequency - see Hpf.h for why 20 Hz alone cannot reach the
-        // guarantee's <= -120 dBFS bit-transparency bar (a highpass has no
-        // frequency setting that is an exact identity, unlike a shelf/peak
-        // EQ at 0 dB gain).
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAHpfFreq, 1 },
-            "Direct HPF Freq",
-            makeLogRange (20.0f, 300.0f),
-            80.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
-
-        // Console EQ ("British console" character): LowShelf 100 Hz,
-        // Peak 250 Hz-5 kHz (Q 0.7-2), HighShelf 8 kHz, all +/-15 dB (brief).
-        // At 0 dB every band collapses to an exact identity biquad (the RBJ
-        // cookbook shelf/peak formulas produce b_n == a_n term-by-term when
-        // the gain factor is 1) - this is what keeps the null test's "EQ
-        // flat" bit-exact.
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAEqLowGain, 1 },
-            "Direct EQ Low Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+            juce::ParameterID { ParamIDs::directDeessPreEnabled, 1 }, "Direct De-Ess Pre Enabled", false));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAEqMidFreq, 1 },
-            "Direct EQ Mid Freq",
-            makeLogRange (250.0f, 5000.0f),
-            1000.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAEqMidGain, 1 },
-            "Direct EQ Mid Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAEqMidQ, 1 },
-            "Direct EQ Mid Q",
-            juce::NormalisableRange<float> (0.7f, 2.0f, 0.001f),
-            1.0f,
-            juce::AudioParameterFloatAttributes()));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busAEqHighGain, 1 },
-            "Direct EQ High Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        // FET Comp: ratio {4:1, 8:1} (brief). Threshold is not explicitly
-        // enumerated in the brief's Bus A module bullet list but is required
-        // for the module to compress at all and is explicitly exercised by
-        // the M1 null-test guarantee ("comp threshold at max") - see
-        // docs/architecture.md's "Deviations from the design brief" section.
-        layout.add (std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { ParamIDs::busACompRatio, 1 }, "Direct Comp Ratio", compRatioChoices, 0));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busACompThreshold, 1 },
-            "Direct Comp Threshold",
-            juce::NormalisableRange<float> (-40.0f, 0.0f, 0.01f),
-            -18.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busACompAttack, 1 },
-            "Direct Comp Attack",
-            makeLogRange (0.1f, 10.0f),
-            3.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("ms")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busACompRelease, 1 },
-            "Direct Comp Release",
-            makeLogRange (50.0f, 1100.0f),
-            150.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("ms")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busACompMakeup, 1 },
-            "Direct Comp Makeup",
-            juce::NormalisableRange<float> (0.0f, 24.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        // De-Esser: split-band 4-9 kHz tunable, threshold, max 10 dB
-        // reduction (brief). Off by default so it never colours a vocal
-        // until the user opts in.
-        layout.add (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { ParamIDs::busADeessEnabled, 1 }, "Direct De-Ess Enabled", true));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busADeessFreq, 1 },
-            "Direct De-Ess Freq",
+            juce::ParameterID { ParamIDs::directDeessPreFreq, 1 },
+            "Direct De-Ess Pre Freq",
             makeLogRange (4000.0f, 9000.0f),
             6500.0f,
             juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busADeessThreshold, 1 },
-            "Direct De-Ess Threshold",
+            juce::ParameterID { ParamIDs::directDeessPreThreshold, 1 },
+            "Direct De-Ess Pre Threshold",
             juce::NormalisableRange<float> (-40.0f, 0.0f, 0.01f),
             -24.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
-        // Tape Sat: drive 0-24 dB into tanh with pre-emphasis/de-emphasis
-        // pair, auto-compensated (brief). 0 dB (the parameter's minimum) is
-        // a bit-exact bypass - see TapeSat.h.
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::directFetEnabled, 1 }, "Direct FET Enabled", false));
+
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busASatDrive, 1 },
+            juce::ParameterID { ParamIDs::directFetThreshold, 1 },
+            "Direct FET Threshold",
+            juce::NormalisableRange<float> (-40.0f, 0.0f, 0.01f),
+            -18.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directFetAttack, 1 },
+            "Direct FET Attack",
+            makeLogRange (1.0f, 30.0f),
+            8.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("ms")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directFetRelease, 1 },
+            "Direct FET Release",
+            makeLogRange (50.0f, 500.0f),
+            150.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("ms")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directFetMakeup, 1 },
+            "Direct FET Makeup",
+            juce::NormalisableRange<float> (0.0f, 24.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::directEqHpfEnabled, 1 }, "Direct EQ HPF Enabled", false));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::directEqHpfFreq, 1 }, "Direct EQ HPF Freq", eqHpfFreqChoices, 1));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::directEqLowFreq, 1 }, "Direct EQ Low Freq", eqLowFreqChoices, 2));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directEqLowGain, 1 },
+            "Direct EQ Low Gain",
+            juce::NormalisableRange<float> (-16.0f, 16.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::directEqMidFreq, 1 }, "Direct EQ Mid Freq", eqMidFreqChoices, 2));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directEqMidGain, 1 },
+            "Direct EQ Mid Gain",
+            juce::NormalisableRange<float> (-18.0f, 18.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directEqHighGain, 1 },
+            "Direct EQ High Gain",
+            juce::NormalisableRange<float> (-16.0f, 16.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directEqDrive, 1 },
+            "Direct EQ Drive",
+            juce::NormalisableRange<float> (0.0f, 24.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directSatDrive, 1 },
             "Direct Sat Drive",
             juce::NormalisableRange<float> (0.0f, 24.0f, 0.01f),
-            6.0f,
+            0.0f, // 0 dB (parameter minimum) is a bit-exact bypass - see TapeSat.h
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
-        addLevelMuteSolo (layout, ParamIDs::busALevel, ParamIDs::busAMute, ParamIDs::busASolo, "Direct", 0.0f);
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::directDeessPostEnabled, 1 }, "Direct De-Ess Post Enabled", false));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directDeessPostFreq, 1 },
+            "Direct De-Ess Post Freq",
+            makeLogRange (4000.0f, 9000.0f),
+            6500.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::directDeessPostThreshold, 1 },
+            "Direct De-Ess Post Threshold",
+            juce::NormalisableRange<float> (-40.0f, 0.0f, 0.01f),
+            -24.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
         //======================================================================
-        // Bus B - Opto sandwich
-        layout.add (std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { ParamIDs::busBLowBoostFreq, 1 }, "Opto Low Boost Freq", busBLowBoostFreqChoices, 1));
-
+        // Bus (1) CRUSH
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busBLowBoostGain, 1 },
-            "Opto Low Boost Gain",
-            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f),
-            0.0f,
+            juce::ParameterID { ParamIDs::crushInput, 1 },
+            "Crush Input",
+            juce::NormalisableRange<float> (0.0f, 48.0f, 0.01f),
+            12.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
         layout.add (std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { ParamIDs::busBHighBoostFreq, 1 }, "Opto High Boost Freq", busBHighBoostFreqChoices, 2));
+            juce::ParameterID { ParamIDs::crushRatio, 1 }, "Crush Ratio", crushRatioChoices, 4)); // default ALL
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::crushStyle, 1 }, "Crush Style", crushStyleChoices, 0)); // default All-Buttons
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busBHighBoostGain, 1 },
-            "Opto High Boost Gain",
-            juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        // Opto Leveler: program-dependent two-stage release, soft ~3:1
-        // ratio, attack ~10 ms fixed (not user-exposed, brief), peak
-        // reduction 0-100%, makeup (brief). 0% is a bit-exact bypass.
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busBOptoReduction, 1 },
-            "Opto Peak Reduction",
-            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
-            40.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("%")));
+            juce::ParameterID { ParamIDs::crushAttack, 1 },
+            "Crush Attack",
+            juce::NormalisableRange<float> (1.0f, 7.0f, 0.01f),
+            1.0f, // slowest (brief default)
+            juce::AudioParameterFloatAttributes()));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busBOptoMakeup, 1 },
-            "Opto Makeup",
-            juce::NormalisableRange<float> (0.0f, 24.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        // Passive Air out: HighShelf 12 kHz 0-8 dB, boost only (brief).
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busBAirGain, 1 },
-            "Opto Air Gain",
-            juce::NormalisableRange<float> (0.0f, 8.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        // Bus B/C/D default to off (-60 dB floor, see addLevelMuteSolo) so
-        // the plugin's out-of-the-box sound is just the Direct chain -
-        // consistent with a "rough vocal template" workflow where the
-        // parallel busses are blended in deliberately, not on by default.
-        addLevelMuteSolo (layout, ParamIDs::busBLevel, ParamIDs::busBMute, ParamIDs::busBSolo, "Opto", -60.0f);
-
-        //======================================================================
-        // Bus C - Smash (FET Limiter, all-buttons character)
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busCAttack, 1 },
-            "Smash Attack",
-            makeLogRange (0.05f, 0.8f),
-            0.3f,
-            juce::AudioParameterFloatAttributes().withLabel ("ms")));
+            juce::ParameterID { ParamIDs::crushRelease, 1 },
+            "Crush Release",
+            juce::NormalisableRange<float> (1.0f, 7.0f, 0.01f),
+            6.0f, // fast-but-not-fastest (brief default)
+            juce::AudioParameterFloatAttributes()));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busCRelease, 1 },
-            "Smash Release",
-            makeLogRange (50.0f, 200.0f),
-            100.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("ms")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busCDrive, 1 },
-            "Smash Drive",
-            juce::NormalisableRange<float> (0.0f, 12.0f, 0.01f),
-            0.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busCOutputTrim, 1 },
-            "Smash Output Trim",
+            juce::ParameterID { ParamIDs::crushOutput, 1 },
+            "Crush Output",
             juce::NormalisableRange<float> (-12.0f, 12.0f, 0.01f),
             0.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
-        addLevelMuteSolo (layout, ParamIDs::busCLevel, ParamIDs::busCMute, ParamIDs::busCSolo, "Smash", -60.0f);
+        addLevelMuteAudition (layout, ParamIDs::crushLevel, ParamIDs::crushMute, ParamIDs::crushAudition, "Crush", -9.0f);
 
         //======================================================================
-        // Bus D - Slap
+        // Bus (2) SANDWICH
+        addPassiveEqParams (layout,
+            ParamIDs::sandPreLfFreq, ParamIDs::sandPreLfBoost, ParamIDs::sandPreLfCut,
+            ParamIDs::sandPreHfBellFreq, ParamIDs::sandPreHfBellBoost, ParamIDs::sandPreHfBellBandwidth,
+            ParamIDs::sandPreHfShelfFreq, ParamIDs::sandPreHfShelfAtten,
+            "Sand Pre",
+            3, 0.0f, 3.6f,   // LF: 100 Hz selected, no boost, cut ~ -3.8 dB (brief default)
+            3, 3.4f, 5.0f,   // HF bell: 8 kHz selected, boost ~ +3.6 dB (brief default), moderate bandwidth
+            1, 0.0f);        // HF shelf: 10 kHz selected, no attenuation
+
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busDDelayMs, 1 },
-            "Slap Delay",
-            juce::NormalisableRange<float> (60.0f, 180.0f, 0.01f),
+            juce::ParameterID { ParamIDs::sandPeakRed, 1 },
+            "Sand Peak Reduction",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            40.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::sandLimit, 1 }, "Sand Limit", false));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::sandEmphasis, 1 },
+            "Sand Emphasis",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            100.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::sandResidual, 1 }, "Sand Residual", true));
+
+        addPassiveEqParams (layout,
+            ParamIDs::sandPostLfFreq, ParamIDs::sandPostLfBoost, ParamIDs::sandPostLfCut,
+            ParamIDs::sandPostHfBellFreq, ParamIDs::sandPostHfBellBoost, ParamIDs::sandPostHfBellBandwidth,
+            ParamIDs::sandPostHfShelfFreq, ParamIDs::sandPostHfShelfAtten,
+            "Sand Post",
+            3, 3.5f, 0.0f,   // LF: 100 Hz selected, boost ~ +2.8 dB (brief default), no cut
+            3, 0.0f, 5.0f,   // HF bell: unused by default
+            1, 2.2f);        // HF shelf: 10 kHz selected, atten ~ -1.8 dB (brief default)
+
+        addLevelMuteAudition (layout, ParamIDs::sandLevel, ParamIDs::sandMute, ParamIDs::sandAudition, "Sand", -12.0f);
+
+        //======================================================================
+        // Bus (3) SPREAD
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::spreadDetune, 1 },
+            "Spread Detune",
+            juce::NormalisableRange<float> (0.0f, 15.0f, 0.01f),
+            6.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("cents")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::spreadTime, 1 },
+            "Spread Time",
+            juce::NormalisableRange<float> (0.5f, 2.0f, 0.001f),
+            1.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("x")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::spreadWidth, 1 },
+            "Spread Width",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            70.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        addLevelMuteAudition (layout, ParamIDs::spreadLevel, ParamIDs::spreadMute, ParamIDs::spreadAudition, "Spread", -18.0f);
+
+        //======================================================================
+        // Bus (4) SLAP
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::slapTime, 1 },
+            "Slap Time",
+            juce::NormalisableRange<float> (50.0f, 160.0f, 0.01f),
             110.0f,
             juce::AudioParameterFloatAttributes().withLabel ("ms")));
 
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::slapStereo, 1 }, "Slap Stereo", false));
+
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busDFeedback, 1 },
-            "Slap Feedback",
-            juce::NormalisableRange<float> (0.0f, 30.0f, 0.01f),
-            15.0f,
+            juce::ParameterID { ParamIDs::slapTone, 1 },
+            "Slap Tone",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            50.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
 
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busDHpFreq, 1 },
-            "Slap Loop HP",
-            makeLogRange (50.0f, 1000.0f),
-            200.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
-
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::busDLpFreq, 1 },
-            "Slap Loop LP",
-            makeLogRange (2000.0f, 10000.0f),
-            5000.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
-
-        layout.add (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { ParamIDs::busDMono, 1 }, "Slap Mono", false));
-
-        addLevelMuteSolo (layout, ParamIDs::busDLevel, ParamIDs::busDMute, ParamIDs::busDSolo, "Slap", -60.0f);
+        addLevelMuteAudition (layout, ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition, "Slap", -15.0f);
 
         return layout;
     }

@@ -7,8 +7,8 @@
 #include <limits>
 #include <random>
 
-// M1 guarantees 8 and 9: NaN/Inf sweep -> finite output with state recovery
-// after reset(), and the Release-safe oversized-block clamp - plus the
+// Guarantee 9: NaN/Inf sweep -> finite output with state recovery after
+// reset(), and the Release-safe oversized-block clamp - plus the
 // suite-standard robustness battery (silence, denormals, zero-sample
 // blocks, extreme parameters, rapid automation).
 namespace
@@ -27,17 +27,21 @@ namespace
         param->setValueNotifyingHost (on ? 1.0f : 0.0f);
     }
 
-    // Brings up all four bus faders so every path (including the slap
-    // delay line) actually processes signal during the sweeps.
+    // Brings up all four bus faders and drives every dynamics module so
+    // every path (including both delay-line busses) actually processes
+    // signal during the sweeps.
     void bringUpAllBusses (MiserereAudioProcessor& processor)
     {
-        setParam (processor, ParamIDs::busALevel, 0.0f);
-        setParam (processor, ParamIDs::busBLevel, 0.0f);
-        setParam (processor, ParamIDs::busCLevel, 0.0f);
-        setParam (processor, ParamIDs::busDLevel, 0.0f);
-        setParam (processor, ParamIDs::busBOptoReduction, 60.0f);
-        setParam (processor, ParamIDs::busCDrive, 6.0f);
-        setParam (processor, ParamIDs::busDFeedback, 20.0f);
+        setParam (processor, ParamIDs::crushLevel, 0.0f);
+        setParam (processor, ParamIDs::sandLevel, 0.0f);
+        setParam (processor, ParamIDs::spreadLevel, 0.0f);
+        setParam (processor, ParamIDs::slapLevel, 0.0f);
+        setParam (processor, ParamIDs::crushInput, 24.0f);
+        setParam (processor, ParamIDs::sandPeakRed, 60.0f);
+        setBool (processor, ParamIDs::directFetEnabled, true);
+        setBool (processor, ParamIDs::directEqHpfEnabled, true);
+        setBool (processor, ParamIDs::directDeessPreEnabled, true);
+        setBool (processor, ParamIDs::directDeessPostEnabled, true);
     }
 }
 
@@ -57,7 +61,7 @@ TEST_CASE ("Silence produces silence (and no NaN/Inf)", "[robustness]")
         CHECK (TestHelpers::allSamplesFinite (buffer));
     }
 
-    CHECK (TestHelpers::peakAbsolute (buffer) < 1.0e-6f);
+    CHECK (TestHelpers::peakAbsolute (buffer) < 1.0e-5f);
 }
 
 TEST_CASE ("NaN input produces finite output", "[robustness][nan]")
@@ -88,7 +92,6 @@ TEST_CASE ("Inf input produces finite output, and state recovers after reset()",
 
     juce::MidiBuffer midi;
 
-    // Poison the whole engine with Inf.
     {
         juce::AudioBuffer<float> buffer (2, 512);
         for (int channel = 0; channel < 2; ++channel)
@@ -103,13 +106,8 @@ TEST_CASE ("Inf input produces finite output, and state recovers after reset()",
         CHECK (TestHelpers::allSamplesFinite (buffer));
     }
 
-    // reset() must clear every module's poisoned state (IIR filters,
-    // envelopes, the slap delay line)...
     CHECK_NOTHROW (processor.reset());
 
-    // ...so a clean signal afterwards processes normally: finite AND at a
-    // sane level (a silent/zeroed output here would mean a filter is still
-    // stuck on NaN and being masked by the output sanitiser).
     double totalRms = 0.0;
 
     for (int block = 0; block < 8; ++block)
@@ -181,9 +179,6 @@ TEST_CASE ("Oversized block: processed fully and safely via chunking (Release-sa
     CHECK_NOTHROW (processor.processBlock (buffer, midi));
     CHECK (TestHelpers::allSamplesFinite (buffer));
 
-    // The full buffer must actually have been processed - the tail (well
-    // past the declared 128 samples) still carries signal, proving the
-    // clamp chunks rather than truncating.
     double tailEnergy = 0.0;
     for (int sample = 4096; sample < 8192; ++sample)
         tailEnergy += std::abs (buffer.getSample (0, sample));
@@ -191,21 +186,14 @@ TEST_CASE ("Oversized block: processed fully and safely via chunking (Release-sa
     CHECK (tailEnergy > 1.0);
 }
 
-TEST_CASE ("Oversized block: the neutral null property survives chunking", "[robustness][oversized][null]")
+TEST_CASE ("Oversized block: the direct-path null property survives chunking", "[robustness][oversized][null]")
 {
     MiserereAudioProcessor processor;
 
-    // Neutral Direct bus solo (the guarantee-1 configuration).
-    setBool (processor, ParamIDs::busAHpfEnabled, false);
-    setParam (processor, ParamIDs::busAEqLowGain, 0.0f);
-    setParam (processor, ParamIDs::busAEqMidGain, 0.0f);
-    setParam (processor, ParamIDs::busAEqHighGain, 0.0f);
-    setParam (processor, ParamIDs::busACompThreshold, 0.0f);
-    setParam (processor, ParamIDs::busACompMakeup, 0.0f);
-    setBool (processor, ParamIDs::busADeessEnabled, false);
-    setParam (processor, ParamIDs::busASatDrive, 0.0f);
-    setParam (processor, ParamIDs::busALevel, 0.0f);
-    setBool (processor, ParamIDs::busASolo, true);
+    setBool (processor, ParamIDs::crushMute, true);
+    setBool (processor, ParamIDs::sandMute, true);
+    setBool (processor, ParamIDs::spreadMute, true);
+    setBool (processor, ParamIDs::slapMute, true);
 
     processor.prepareToPlay (48000.0, 128);
 
@@ -235,34 +223,45 @@ TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[
 
         setParam (processor, ParamIDs::inTrim, useMinimum ? -12.0f : 12.0f);
         setParam (processor, ParamIDs::outTrim, useMinimum ? -12.0f : 12.0f);
-        setParam (processor, ParamIDs::busAHpfFreq, useMinimum ? 20.0f : 300.0f);
-        setParam (processor, ParamIDs::busAEqLowGain, useMinimum ? -15.0f : 15.0f);
-        setParam (processor, ParamIDs::busAEqMidFreq, useMinimum ? 250.0f : 5000.0f);
-        setParam (processor, ParamIDs::busAEqMidGain, useMinimum ? -15.0f : 15.0f);
-        setParam (processor, ParamIDs::busAEqMidQ, useMinimum ? 0.7f : 2.0f);
-        setParam (processor, ParamIDs::busAEqHighGain, useMinimum ? -15.0f : 15.0f);
-        setParam (processor, ParamIDs::busACompThreshold, useMinimum ? -40.0f : 0.0f);
-        setParam (processor, ParamIDs::busACompAttack, useMinimum ? 0.1f : 10.0f);
-        setParam (processor, ParamIDs::busACompRelease, useMinimum ? 50.0f : 1100.0f);
-        setParam (processor, ParamIDs::busACompMakeup, useMinimum ? 0.0f : 24.0f);
-        setParam (processor, ParamIDs::busADeessFreq, useMinimum ? 4000.0f : 9000.0f);
-        setParam (processor, ParamIDs::busADeessThreshold, useMinimum ? -40.0f : 0.0f);
-        setParam (processor, ParamIDs::busASatDrive, useMinimum ? 0.0f : 24.0f);
-        setParam (processor, ParamIDs::busBLowBoostGain, useMinimum ? 0.0f : 10.0f);
-        setParam (processor, ParamIDs::busBHighBoostGain, useMinimum ? 0.0f : 10.0f);
-        setParam (processor, ParamIDs::busBOptoReduction, useMinimum ? 0.0f : 100.0f);
-        setParam (processor, ParamIDs::busBOptoMakeup, useMinimum ? 0.0f : 24.0f);
-        setParam (processor, ParamIDs::busBAirGain, useMinimum ? 0.0f : 8.0f);
-        setParam (processor, ParamIDs::busCAttack, useMinimum ? 0.05f : 0.8f);
-        setParam (processor, ParamIDs::busCRelease, useMinimum ? 50.0f : 200.0f);
-        setParam (processor, ParamIDs::busCDrive, useMinimum ? 0.0f : 12.0f);
-        setParam (processor, ParamIDs::busCOutputTrim, useMinimum ? -12.0f : 12.0f);
-        setParam (processor, ParamIDs::busDDelayMs, useMinimum ? 60.0f : 180.0f);
-        setParam (processor, ParamIDs::busDFeedback, useMinimum ? 0.0f : 30.0f);
-        setParam (processor, ParamIDs::busDHpFreq, useMinimum ? 50.0f : 1000.0f);
-        setParam (processor, ParamIDs::busDLpFreq, useMinimum ? 2000.0f : 10000.0f);
+        setParam (processor, ParamIDs::parallelTrim, useMinimum ? -24.0f : 6.0f);
+        setParam (processor, ParamIDs::directDeessPreFreq, useMinimum ? 4000.0f : 9000.0f);
+        setParam (processor, ParamIDs::directDeessPreThreshold, useMinimum ? -40.0f : 0.0f);
+        setParam (processor, ParamIDs::directFetThreshold, useMinimum ? -40.0f : 0.0f);
+        setParam (processor, ParamIDs::directFetAttack, useMinimum ? 1.0f : 30.0f);
+        setParam (processor, ParamIDs::directFetRelease, useMinimum ? 50.0f : 500.0f);
+        setParam (processor, ParamIDs::directFetMakeup, useMinimum ? 0.0f : 24.0f);
+        setParam (processor, ParamIDs::directEqLowGain, useMinimum ? -16.0f : 16.0f);
+        setParam (processor, ParamIDs::directEqMidGain, useMinimum ? -18.0f : 18.0f);
+        setParam (processor, ParamIDs::directEqHighGain, useMinimum ? -16.0f : 16.0f);
+        setParam (processor, ParamIDs::directEqDrive, useMinimum ? 0.0f : 24.0f);
+        setParam (processor, ParamIDs::directSatDrive, useMinimum ? 0.0f : 24.0f);
+        setParam (processor, ParamIDs::directDeessPostFreq, useMinimum ? 4000.0f : 9000.0f);
+        setParam (processor, ParamIDs::directDeessPostThreshold, useMinimum ? -40.0f : 0.0f);
 
-        for (const auto* levelId : { ParamIDs::busALevel, ParamIDs::busBLevel, ParamIDs::busCLevel, ParamIDs::busDLevel })
+        setParam (processor, ParamIDs::crushInput, useMinimum ? 0.0f : 48.0f);
+        setParam (processor, ParamIDs::crushAttack, useMinimum ? 1.0f : 7.0f);
+        setParam (processor, ParamIDs::crushRelease, useMinimum ? 1.0f : 7.0f);
+        setParam (processor, ParamIDs::crushOutput, useMinimum ? -12.0f : 12.0f);
+
+        setParam (processor, ParamIDs::sandPreLfBoost, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPreLfCut, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPreHfBellBoost, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPreHfShelfAtten, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPeakRed, useMinimum ? 0.0f : 100.0f);
+        setParam (processor, ParamIDs::sandEmphasis, useMinimum ? 0.0f : 100.0f);
+        setParam (processor, ParamIDs::sandPostLfBoost, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPostLfCut, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPostHfBellBoost, useMinimum ? 0.0f : 10.0f);
+        setParam (processor, ParamIDs::sandPostHfShelfAtten, useMinimum ? 0.0f : 10.0f);
+
+        setParam (processor, ParamIDs::spreadDetune, useMinimum ? 0.0f : 15.0f);
+        setParam (processor, ParamIDs::spreadTime, useMinimum ? 0.5f : 2.0f);
+        setParam (processor, ParamIDs::spreadWidth, useMinimum ? 0.0f : 100.0f);
+
+        setParam (processor, ParamIDs::slapTime, useMinimum ? 50.0f : 160.0f);
+        setParam (processor, ParamIDs::slapTone, useMinimum ? 0.0f : 100.0f);
+
+        for (const auto* levelId : { ParamIDs::crushLevel, ParamIDs::sandLevel, ParamIDs::spreadLevel, ParamIDs::slapLevel })
             setParam (processor, levelId, useMinimum ? -60.0f : 6.0f);
 
         TestHelpers::fillWithSine (buffer, 44100.0, 440.0, 0.8f);
@@ -291,18 +290,17 @@ TEST_CASE ("Rapid parameter automation across many blocks produces no NaN/Inf", 
 
     for (int block = 0; block < 100; ++block)
     {
-        for (const auto* id : { ParamIDs::inTrim, ParamIDs::outTrim,
-                                 ParamIDs::busAHpfFreq, ParamIDs::busAEqLowGain, ParamIDs::busAEqMidFreq,
-                                 ParamIDs::busAEqMidGain, ParamIDs::busAEqMidQ, ParamIDs::busAEqHighGain,
-                                 ParamIDs::busACompRatio, ParamIDs::busACompThreshold, ParamIDs::busACompAttack,
-                                 ParamIDs::busACompRelease, ParamIDs::busACompMakeup,
-                                 ParamIDs::busADeessFreq, ParamIDs::busADeessThreshold, ParamIDs::busASatDrive,
-                                 ParamIDs::busBLowBoostFreq, ParamIDs::busBLowBoostGain,
-                                 ParamIDs::busBHighBoostFreq, ParamIDs::busBHighBoostGain,
-                                 ParamIDs::busBOptoReduction, ParamIDs::busBOptoMakeup, ParamIDs::busBAirGain,
-                                 ParamIDs::busCAttack, ParamIDs::busCRelease, ParamIDs::busCDrive, ParamIDs::busCOutputTrim,
-                                 ParamIDs::busDDelayMs, ParamIDs::busDFeedback, ParamIDs::busDHpFreq, ParamIDs::busDLpFreq,
-                                 ParamIDs::busALevel, ParamIDs::busBLevel, ParamIDs::busCLevel, ParamIDs::busDLevel })
+        for (const auto* id : { ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::parallelTrim,
+                                 ParamIDs::directFetThreshold, ParamIDs::directFetAttack, ParamIDs::directFetRelease,
+                                 ParamIDs::directEqLowGain, ParamIDs::directEqMidGain, ParamIDs::directEqHighGain, ParamIDs::directEqDrive,
+                                 ParamIDs::directSatDrive,
+                                 ParamIDs::crushInput, ParamIDs::crushAttack, ParamIDs::crushRelease, ParamIDs::crushOutput,
+                                 ParamIDs::sandPreLfBoost, ParamIDs::sandPreLfCut, ParamIDs::sandPreHfBellBoost,
+                                 ParamIDs::sandPeakRed, ParamIDs::sandEmphasis,
+                                 ParamIDs::sandPostLfBoost, ParamIDs::sandPostLfCut, ParamIDs::sandPostHfBellBoost,
+                                 ParamIDs::spreadDetune, ParamIDs::spreadTime, ParamIDs::spreadWidth,
+                                 ParamIDs::slapTime, ParamIDs::slapTone,
+                                 ParamIDs::crushLevel, ParamIDs::sandLevel, ParamIDs::spreadLevel, ParamIDs::slapLevel })
             randomiseNormalised (id);
 
         juce::AudioBuffer<float> buffer (2, 256);

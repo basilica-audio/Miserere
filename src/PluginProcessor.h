@@ -5,13 +5,14 @@
 
 #include "dsp/MiserereEngine.h"
 
-// Miserere: a parallel vocal chain in a single unit - a Direct chain plus
-// three parallel busses (Opto sandwich, FET Smash, Slap delay), each with
-// its own fader. The whole signal path lives in MiserereEngine (src/dsp) so
-// it stays unit-testable independent of this AudioProcessor; this class is
-// APVTS + host plumbing (parameter fan-out, oversized-block chunking, solo
-// exclusivity) around it. See docs/architecture.md for the signal-flow
-// diagram and docs/design-brief.md for the binding M1 spec.
+// Miserere v2: the parallel vocal template - a Direct (serial, all-off-by-
+// default) path plus four parallel return busses (Crush, Sandwich, Spread,
+// Slap), each with its own fader. The whole signal path lives in
+// MiserereEngine (src/dsp) so it stays unit-testable independent of this
+// AudioProcessor; this class is APVTS + host plumbing (parameter fan-out,
+// oversized-block chunking, audition exclusivity) around it. See
+// docs/architecture.md for the signal-flow diagram and docs/design-brief.md
+// for the binding v2 spec.
 class MiserereAudioProcessor final : public juce::AudioProcessor,
                                       private juce::AudioProcessorValueTreeState::Listener
 {
@@ -58,19 +59,20 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // GR metering values for a future GUI (M3) and for tests.
-    float getDirectCompGainReductionDb() const noexcept { return engine.getDirectCompGainReductionDb(); }
-    float getOptoGainReductionDb() const noexcept { return engine.getOptoGainReductionDb(); }
-    float getSmashGainReductionDb() const noexcept { return engine.getSmashGainReductionDb(); }
+    // GR metering values for a future GUI and for tests.
+    float getDirectFetGainReductionDb() const noexcept { return engine.getDirectFetGainReductionDb(); }
+    float getCrushGainReductionDb() const noexcept { return engine.getCrushGainReductionDb(); }
+    float getSandGainReductionDb() const noexcept { return engine.getSandGainReductionDb(); }
 
 private:
     //==============================================================================
-    // Solo exclusivity (brief: "solo is exclusive-OR"): engaging one bus's
-    // solo releases the other three, enforced here at the parameter level
-    // via this APVTS listener (the engine itself resolves whatever flag
-    // combination it is given - see MiserereEngine.h). The reentrancy guard
-    // stops the cascade of setValueNotifyingHost() calls from re-triggering
-    // this handler for the solos it is itself clearing.
+    // Audition exclusivity (brief: "exclusive Audition"): engaging one
+    // bus's audition releases the other three, enforced here at the
+    // parameter level via this APVTS listener (the engine itself resolves
+    // whatever flag combination it is given - see MiserereEngine.h). The
+    // reentrancy guard stops the cascade of setValueNotifyingHost() calls
+    // from re-triggering this handler for the auditions it is itself
+    // clearing.
     void parameterChanged (const juce::String& parameterId, float newValue) override;
 
     // Pushes every APVTS value into the engine. Called from prepareToPlay()
@@ -88,7 +90,7 @@ private:
     // Release builds.
     int preparedBlockSize = 0;
 
-    std::atomic<bool> soloExclusivityGuard { false };
+    std::atomic<bool> auditionExclusivityGuard { false };
 
     // Raw atomic pointers into the APVTS-managed parameter values, resolved
     // once at construction time so processBlock() never has to search for
@@ -96,46 +98,69 @@ private:
     std::atomic<float>* inTrimDb = nullptr;
     std::atomic<float>* outTrimDb = nullptr;
     std::atomic<float>* bypassFlag = nullptr;
+    std::atomic<float>* linkFlag = nullptr;
+    std::atomic<float>* parallelTrimDb = nullptr;
 
-    std::atomic<float>* busAHpfEnabled = nullptr;
-    std::atomic<float>* busAHpfFreq = nullptr;
-    std::atomic<float>* busAEqLowGain = nullptr;
-    std::atomic<float>* busAEqMidFreq = nullptr;
-    std::atomic<float>* busAEqMidGain = nullptr;
-    std::atomic<float>* busAEqMidQ = nullptr;
-    std::atomic<float>* busAEqHighGain = nullptr;
-    std::atomic<float>* busACompRatio = nullptr;
-    std::atomic<float>* busACompThreshold = nullptr;
-    std::atomic<float>* busACompAttack = nullptr;
-    std::atomic<float>* busACompRelease = nullptr;
-    std::atomic<float>* busACompMakeup = nullptr;
-    std::atomic<float>* busADeessEnabled = nullptr;
-    std::atomic<float>* busADeessFreq = nullptr;
-    std::atomic<float>* busADeessThreshold = nullptr;
-    std::atomic<float>* busASatDrive = nullptr;
+    std::atomic<float>* directDeessPreEnabled = nullptr;
+    std::atomic<float>* directDeessPreFreq = nullptr;
+    std::atomic<float>* directDeessPreThreshold = nullptr;
+    std::atomic<float>* directFetEnabled = nullptr;
+    std::atomic<float>* directFetThreshold = nullptr;
+    std::atomic<float>* directFetAttack = nullptr;
+    std::atomic<float>* directFetRelease = nullptr;
+    std::atomic<float>* directFetMakeup = nullptr;
+    std::atomic<float>* directEqHpfEnabled = nullptr;
+    std::atomic<float>* directEqHpfFreq = nullptr;
+    std::atomic<float>* directEqLowFreq = nullptr;
+    std::atomic<float>* directEqLowGain = nullptr;
+    std::atomic<float>* directEqMidFreq = nullptr;
+    std::atomic<float>* directEqMidGain = nullptr;
+    std::atomic<float>* directEqHighGain = nullptr;
+    std::atomic<float>* directEqDrive = nullptr;
+    std::atomic<float>* directSatDrive = nullptr;
+    std::atomic<float>* directDeessPostEnabled = nullptr;
+    std::atomic<float>* directDeessPostFreq = nullptr;
+    std::atomic<float>* directDeessPostThreshold = nullptr;
 
-    std::atomic<float>* busBLowBoostFreq = nullptr;
-    std::atomic<float>* busBLowBoostGain = nullptr;
-    std::atomic<float>* busBHighBoostFreq = nullptr;
-    std::atomic<float>* busBHighBoostGain = nullptr;
-    std::atomic<float>* busBOptoReduction = nullptr;
-    std::atomic<float>* busBOptoMakeup = nullptr;
-    std::atomic<float>* busBAirGain = nullptr;
+    std::atomic<float>* crushInput = nullptr;
+    std::atomic<float>* crushRatio = nullptr;
+    std::atomic<float>* crushStyle = nullptr;
+    std::atomic<float>* crushAttack = nullptr;
+    std::atomic<float>* crushRelease = nullptr;
+    std::atomic<float>* crushOutput = nullptr;
 
-    std::atomic<float>* busCAttack = nullptr;
-    std::atomic<float>* busCRelease = nullptr;
-    std::atomic<float>* busCDrive = nullptr;
-    std::atomic<float>* busCOutputTrim = nullptr;
+    std::atomic<float>* sandPreLfFreq = nullptr;
+    std::atomic<float>* sandPreLfBoost = nullptr;
+    std::atomic<float>* sandPreLfCut = nullptr;
+    std::atomic<float>* sandPreHfBellFreq = nullptr;
+    std::atomic<float>* sandPreHfBellBoost = nullptr;
+    std::atomic<float>* sandPreHfBellBandwidth = nullptr;
+    std::atomic<float>* sandPreHfShelfFreq = nullptr;
+    std::atomic<float>* sandPreHfShelfAtten = nullptr;
+    std::atomic<float>* sandPeakRed = nullptr;
+    std::atomic<float>* sandLimit = nullptr;
+    std::atomic<float>* sandEmphasis = nullptr;
+    std::atomic<float>* sandResidual = nullptr;
+    std::atomic<float>* sandPostLfFreq = nullptr;
+    std::atomic<float>* sandPostLfBoost = nullptr;
+    std::atomic<float>* sandPostLfCut = nullptr;
+    std::atomic<float>* sandPostHfBellFreq = nullptr;
+    std::atomic<float>* sandPostHfBellBoost = nullptr;
+    std::atomic<float>* sandPostHfBellBandwidth = nullptr;
+    std::atomic<float>* sandPostHfShelfFreq = nullptr;
+    std::atomic<float>* sandPostHfShelfAtten = nullptr;
 
-    std::atomic<float>* busDDelayMs = nullptr;
-    std::atomic<float>* busDFeedback = nullptr;
-    std::atomic<float>* busDHpFreq = nullptr;
-    std::atomic<float>* busDLpFreq = nullptr;
-    std::atomic<float>* busDMono = nullptr;
+    std::atomic<float>* spreadDetune = nullptr;
+    std::atomic<float>* spreadTime = nullptr;
+    std::atomic<float>* spreadWidth = nullptr;
+
+    std::atomic<float>* slapTime = nullptr;
+    std::atomic<float>* slapStereo = nullptr;
+    std::atomic<float>* slapTone = nullptr;
 
     std::array<std::atomic<float>*, MiserereEngine::numBusses> busLevelDb {};
     std::array<std::atomic<float>*, MiserereEngine::numBusses> busMuteFlag {};
-    std::array<std::atomic<float>*, MiserereEngine::numBusses> busSoloFlag {};
+    std::array<std::atomic<float>*, MiserereEngine::numBusses> busAuditionFlag {};
 
     juce::RangedAudioParameter* bypassParameter = nullptr;
 

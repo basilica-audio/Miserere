@@ -7,10 +7,10 @@
 #include <cmath>
 #include <random>
 
-// M1 guarantee 7: slap timing (first echo at the exact configured delay in
-// samples) and feedback stability (bounded output for 10 s of noise at
-// maximum feedback), plus the mono switch and the delay-line reset
-// contract (part of guarantee 10).
+// Bus (4) SLAP: single-repeat timing (first echo at the exact configured
+// delay, no second echo - feedback is fixed at 0 in v2), the repeat being
+// measurably darker than the input, the mono/stereo switch, and the
+// delay-line reset contract - design-brief.md guarantees 7 and 10.
 namespace
 {
     constexpr double testSampleRate = 48000.0;
@@ -34,11 +34,43 @@ namespace
 
         return -1;
     }
+
+    // Simple spectral-centroid estimate (magnitude-weighted mean frequency)
+    // via a naive DFT - the buffers here are short enough that this stays
+    // fast without pulling in juce::dsp::FFT for a one-off measurement.
+    double spectralCentroidHz (const juce::AudioBuffer<float>& buffer, int channel, int startSample, int numSamples, double sampleRate)
+    {
+        const auto* data = buffer.getReadPointer (channel) + startSample;
+
+        constexpr int numBins = 64;
+        double weightedSum = 0.0;
+        double magnitudeSum = 0.0;
+
+        for (int bin = 1; bin < numBins; ++bin)
+        {
+            const auto frequencyHz = bin * sampleRate / (2.0 * numBins);
+            const auto omega = juce::MathConstants<double>::twoPi * frequencyHz / sampleRate;
+
+            double real = 0.0;
+            double imag = 0.0;
+            for (int n = 0; n < numSamples; ++n)
+            {
+                real += data[n] * std::cos (omega * n);
+                imag -= data[n] * std::sin (omega * n);
+            }
+
+            const auto magnitude = std::sqrt (real * real + imag * imag);
+            weightedSum += magnitude * frequencyHz;
+            magnitudeSum += magnitude;
+        }
+
+        return magnitudeSum > 0.0 ? weightedSum / magnitudeSum : 0.0;
+    }
 }
 
 TEST_CASE ("Slap: first echo lands at the exact configured delay in samples", "[dsp][slap][timing]")
 {
-    for (const auto delayMs : { 60.0f, 110.0f, 180.0f })
+    for (const auto delayMs : { 50.0f, 110.0f, 160.0f })
     {
         INFO ("delay = " << delayMs << " ms");
 
@@ -47,7 +79,6 @@ TEST_CASE ("Slap: first echo lands at the exact configured delay in samples", "[
 
         SlapDelay slap;
         slap.setDelayMs (delayMs);
-        slap.setFeedbackProportion (0.0f);
         slap.prepare (makeTestSpec (1, bufferLength));
 
         juce::AudioBuffer<float> buffer (1, bufferLength);
@@ -68,7 +99,6 @@ TEST_CASE ("Slap: the output is wet-only (no dry bleed before the first echo)", 
 {
     SlapDelay slap;
     slap.setDelayMs (110.0f);
-    slap.setFeedbackProportion (0.15f);
     slap.prepare (makeTestSpec (1, 8192));
 
     juce::AudioBuffer<float> buffer (1, 8192);
@@ -78,10 +108,8 @@ TEST_CASE ("Slap: the output is wet-only (no dry bleed before the first echo)", 
     juce::dsp::AudioBlock<float> block (buffer);
     slap.process (block);
 
-    const auto expectedIndex = static_cast<int> (std::round (0.110 * testSampleRate)); // 5280
+    const auto expectedIndex = static_cast<int> (std::round (0.110 * testSampleRate));
 
-    // Sample 0 (where the dry impulse sat) must now be silent - the bus is
-    // a pure echo return; the dry voice belongs to Bus A.
     for (int sample = 0; sample < expectedIndex; ++sample)
     {
         INFO ("sample = " << sample);
@@ -89,114 +117,73 @@ TEST_CASE ("Slap: the output is wet-only (no dry bleed before the first echo)", 
     }
 }
 
-TEST_CASE ("Slap: feedback produces a second echo that is quieter than the first", "[dsp][slap][feedback]")
-{
-    constexpr float delayMs = 80.0f;
-    const auto delaySamples = static_cast<int> (std::round (delayMs * 0.001 * testSampleRate)); // 3840
-    const auto bufferLength = delaySamples * 3 + 1000;
-
-    SlapDelay slap;
-    slap.setDelayMs (delayMs);
-    slap.setFeedbackProportion (0.3f); // maximum
-    slap.prepare (makeTestSpec (1, bufferLength));
-
-    juce::AudioBuffer<float> buffer (1, bufferLength);
-    buffer.clear();
-    buffer.setSample (0, 0, 0.5f);
-
-    juce::dsp::AudioBlock<float> block (buffer);
-    slap.process (block);
-
-    // Measure peaks in windows around the first and second echoes (the
-    // loop filters smear the repeats slightly, so a window rather than a
-    // single sample).
-    const auto windowPeak = [&] (int centre)
-    {
-        float peak = 0.0f;
-        for (int i = std::max (0, centre - 100); i < std::min (bufferLength, centre + 100); ++i)
-            peak = std::max (peak, std::abs (buffer.getSample (0, i)));
-        return peak;
-    };
-
-    const auto firstEchoPeak = windowPeak (delaySamples);
-    const auto secondEchoPeak = windowPeak (delaySamples * 2);
-
-    REQUIRE (firstEchoPeak > 0.01f);
-    CHECK (secondEchoPeak > 1.0e-5f);            // feedback really recirculates
-    CHECK (secondEchoPeak < firstEchoPeak * 0.5f); // and decays (30% + loop losses)
-}
-
-TEST_CASE ("Slap: zero feedback produces exactly one echo", "[dsp][slap][feedback]")
+TEST_CASE ("Slap: feedback is fixed at 0 - no second echo above -80 dBFS", "[dsp][slap][feedback]")
 {
     constexpr float delayMs = 80.0f;
     const auto delaySamples = static_cast<int> (std::round (delayMs * 0.001 * testSampleRate));
-    const auto bufferLength = delaySamples * 3;
+    const auto bufferLength = delaySamples * 4;
 
     SlapDelay slap;
     slap.setDelayMs (delayMs);
-    slap.setFeedbackProportion (0.0f);
     slap.prepare (makeTestSpec (1, bufferLength));
 
     juce::AudioBuffer<float> buffer (1, bufferLength);
     buffer.clear();
-    buffer.setSample (0, 0, 0.5f);
+    buffer.setSample (0, 0, 0.9f);
 
     juce::dsp::AudioBlock<float> block (buffer);
     slap.process (block);
 
-    // Everything from just past the first echo on must be silent.
-    for (int sample = delaySamples + 10; sample < bufferLength; ++sample)
+    constexpr float minus80Dbfs = 1.0e-4f; // 10^(-80/20)
+
+    // The single repeat's own darkening lowpass has a genuine (short)
+    // impulse-response tail immediately after the onset - not a second
+    // echo, just that filter settling. Give it a generous settling window
+    // (a few hundred samples) before asserting silence, so this test
+    // specifically proves "no SECOND repeat", not "the filter has zero
+    // group delay".
+    for (int sample = delaySamples + 500; sample < bufferLength; ++sample)
     {
         INFO ("sample = " << sample);
-        REQUIRE (std::abs (buffer.getSample (0, sample)) < 1.0e-6f);
+        REQUIRE (std::abs (buffer.getSample (0, sample)) < minus80Dbfs);
     }
 }
 
-TEST_CASE ("Slap: stable and bounded for 10 seconds of noise at maximum feedback", "[dsp][slap][stability]")
+TEST_CASE ("Slap: the repeat is measurably darker than the input (lower spectral centroid)", "[dsp][slap][tone]")
 {
-    constexpr int blockSize = 512;
+    constexpr float delayMs = 80.0f;
+    const auto delaySamples = static_cast<int> (std::round (delayMs * 0.001 * testSampleRate));
+    const auto bufferLength = delaySamples + 512;
 
     SlapDelay slap;
-    slap.setDelayMs (60.0f); // shortest delay = most loop round trips in 10 s
-    slap.setFeedbackProportion (0.3f);
-    slap.prepare (makeTestSpec (2, blockSize));
+    slap.setDelayMs (delayMs);
+    slap.setToneProportion (1.0f); // "darker" end of the range
+    slap.prepare (makeTestSpec (1, bufferLength));
 
-    std::mt19937 rng (4242);
-    std::uniform_real_distribution<float> noise (-1.0f, 1.0f);
+    // A broadband impulse so the spectral-centroid probe has full-spectrum
+    // content to compare before/after the repeat's darkening filter.
+    juce::AudioBuffer<float> buffer (1, bufferLength);
+    buffer.clear();
+    buffer.setSample (0, 0, 1.0f);
 
-    const auto totalBlocks = static_cast<int> (10.0 * testSampleRate / blockSize);
-    float overallPeak = 0.0f;
+    juce::dsp::AudioBlock<float> block (buffer);
+    slap.process (block);
 
-    for (int blockIndex = 0; blockIndex < totalBlocks; ++blockIndex)
-    {
-        juce::AudioBuffer<float> buffer (2, blockSize);
+    // Compare the impulse response's spectral centroid in a window right at
+    // the input (an unfiltered impulse - flat spectrum, so this is really
+    // measuring the delay+darkening filter's own response) against a probe
+    // fed through nothing (an ideal flat reference at Nyquist/2-ish).
+    const auto repeatCentroid = spectralCentroidHz (buffer, 0, delaySamples, 256, testSampleRate);
+    const auto nyquistQuarter = testSampleRate / 4.0; // a flat spectrum's centroid over [0, Nyquist/2] sits near here
 
-        for (int channel = 0; channel < 2; ++channel)
-        {
-            auto* data = buffer.getWritePointer (channel);
-            for (int sample = 0; sample < blockSize; ++sample)
-                data[sample] = noise (rng);
-        }
-
-        juce::dsp::AudioBlock<float> block (buffer);
-        slap.process (block);
-
-        REQUIRE (TestHelpers::allSamplesFinite (buffer));
-        overallPeak = std::max (overallPeak, TestHelpers::peakAbsolute (buffer));
-    }
-
-    // Geometric feedback decay (0.3 per round trip, further reduced by the
-    // loop filters/saturator) bounds the worst-case sum well under 2x the
-    // input peak; 4.0 is a generous ceiling that still proves stability.
-    CHECK (overallPeak < 4.0f);
+    CHECK (repeatCentroid < nyquistQuarter);
 }
 
-TEST_CASE ("Slap: mono switch makes both output channels identical", "[dsp][slap][mono]")
+TEST_CASE ("Slap: mono (default) - both output channels carry the identical echo", "[dsp][slap][mono]")
 {
     SlapDelay slap;
     slap.setDelayMs (80.0f);
-    slap.setFeedbackProportion (0.2f);
-    slap.setMonoEnabled (true);
+    slap.setStereoEnabled (false);
     slap.prepare (makeTestSpec (2, 16384));
 
     // Deliberately different L/R content.
@@ -221,18 +208,16 @@ TEST_CASE ("Slap: mono switch makes both output channels identical", "[dsp][slap
     }
 }
 
-TEST_CASE ("Slap: stereo (non-mono) mode keeps channels independent", "[dsp][slap][mono]")
+TEST_CASE ("Slap: stereo mode keeps channels independent", "[dsp][slap][mono]")
 {
     SlapDelay slap;
     slap.setDelayMs (80.0f);
-    slap.setFeedbackProportion (0.0f);
-    slap.setMonoEnabled (false);
+    slap.setStereoEnabled (true);
     slap.prepare (makeTestSpec (2, 16384));
 
-    // Impulse on the left channel only.
     juce::AudioBuffer<float> buffer (2, 16384);
     buffer.clear();
-    buffer.setSample (0, 0, 0.5f);
+    buffer.setSample (0, 0, 0.5f); // impulse on the left channel only
 
     juce::dsp::AudioBlock<float> block (buffer);
     slap.process (block);
@@ -241,14 +226,44 @@ TEST_CASE ("Slap: stereo (non-mono) mode keeps channels independent", "[dsp][sla
     CHECK (findFirstEchoIndex (buffer, 1) == -1); // nothing leaked to the right
 }
 
+TEST_CASE ("Slap: stable and finite for 10 seconds of full-scale noise", "[dsp][slap][stability]")
+{
+    constexpr int blockSize = 512;
+
+    SlapDelay slap;
+    slap.setDelayMs (60.0f);
+    slap.prepare (makeTestSpec (2, blockSize));
+
+    std::mt19937 rng (4242);
+    std::uniform_real_distribution<float> noise (-1.0f, 1.0f);
+
+    const auto totalBlocks = static_cast<int> (10.0 * testSampleRate / blockSize);
+
+    for (int blockIndex = 0; blockIndex < totalBlocks; ++blockIndex)
+    {
+        juce::AudioBuffer<float> buffer (2, blockSize);
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            auto* data = buffer.getWritePointer (channel);
+            for (int sample = 0; sample < blockSize; ++sample)
+                data[sample] = noise (rng);
+        }
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        slap.process (block);
+
+        REQUIRE (TestHelpers::allSamplesFinite (buffer));
+        REQUIRE (TestHelpers::peakAbsolute (buffer) < 4.0f); // no feedback loop - bounded well under any runaway threshold
+    }
+}
+
 TEST_CASE ("Slap: reset() clears the delay line (no stale echo after reset)", "[dsp][slap][reset]")
 {
     SlapDelay slap;
     slap.setDelayMs (110.0f);
-    slap.setFeedbackProportion (0.3f);
     slap.prepare (makeTestSpec (1, 16384));
 
-    // Push an impulse in, but reset before the echo has emerged.
     juce::AudioBuffer<float> buffer (1, 1024);
     buffer.clear();
     buffer.setSample (0, 0, 0.9f);
@@ -258,8 +273,6 @@ TEST_CASE ("Slap: reset() clears the delay line (no stale echo after reset)", "[
 
     slap.reset();
 
-    // Process enough silence to cover the full echo horizon: if the delay
-    // line survived reset, the echo would appear here.
     juce::AudioBuffer<float> silence (1, 16384);
     silence.clear();
 

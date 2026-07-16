@@ -1,20 +1,27 @@
 #pragma once
 
 // Central definition of all AudioProcessorValueTreeState parameter IDs for
-// Miserere. See docs/architecture.md for the corresponding signal-flow
-// diagram and docs/design-brief.md for the binding M1 topology/parameter
+// Miserere v2. See docs/architecture.md for the corresponding signal-flow
+// diagram and docs/design-brief.md for the binding v2 topology/parameter
 // specification.
 //
-// FROZEN AS OF THE v0.1.0 PARAMETER LAYOUT:
-// Parameter IDs below must NEVER change once shipped - saved sessions and
-// presets persist the APVTS state keyed by these string IDs, and renaming or
-// removing one would silently break every user's saved state. Ranges,
-// defaults, and skew MAY still be refined during voicing/tuning milestones;
-// only the IDs themselves are frozen.
+// v2 is a full topology rewrite (docs/adr/0003, superseded framing in the
+// design brief) and ships breaking parameter changes deliberately - the v1
+// IDs below (busA_*/busB_*/busC_*/busD_*) are gone. Pre-1.0, breaking
+// parameter changes are acceptable (see design-brief.md "Versioning");
+// `setStateInformation` tolerantly ignores unknown old IDs rather than
+// crashing (see StateTests.cpp's v1-import test) - there is no attempt to
+// migrate v1 values forward, only to survive loading a v1 session.
 //
-// Naming convention: global parameters have no prefix; per-bus parameters
-// are prefixed busA_/busB_/busC_/busD_ matching the design brief's bus
-// letters (A = Direct, B = Opto, C = Smash, D = Slap).
+// FROZEN AS OF THE v0.2.0 PARAMETER LAYOUT:
+// IDs below must not change again without a further breaking-version bump.
+// Ranges/defaults/skew may still be refined during voicing/tuning work.
+//
+// Naming convention: global parameters have no prefix; the direct (serial)
+// path is prefixed direct_; the four parallel busses are prefixed
+// crush_ (1 - FET limiter, all-buttons character), sand_ (2 - Passive EQ ->
+// Opto Leveler -> Passive EQ "sandwich"), spread_ (3 - dual micro-pitch),
+// slap_ (4 - single-repeat delay).
 namespace ParamIDs
 {
     //==========================================================================
@@ -23,69 +30,102 @@ namespace ParamIDs
     inline constexpr auto outTrim = "out_trim";
     inline constexpr auto bypass = "bypass";
 
-    //==========================================================================
-    // Bus A - Direct chain: HPF -> Console EQ -> FET Comp -> De-Esser -> Tape Sat
-    inline constexpr auto busAHpfEnabled = "busA_hpfEnabled";
-    inline constexpr auto busAHpfFreq = "busA_hpfFreq";
+    // Global stereo-detection link: unlinked (independent L/R detectors) is
+    // the default - "dual mono is key" (design brief) - engaging Link makes
+    // the Crush and Sandwich detectors track a combined L/R signal instead.
+    inline constexpr auto link = "link";
 
-    inline constexpr auto busAEqLowGain = "busA_eqLowGain";   // fixed 100 Hz low shelf
-    inline constexpr auto busAEqMidFreq = "busA_eqMidFreq";   // sweepable peak, 250 Hz-5 kHz
-    inline constexpr auto busAEqMidGain = "busA_eqMidGain";
-    inline constexpr auto busAEqMidQ = "busA_eqMidQ";
-    inline constexpr auto busAEqHighGain = "busA_eqHighGain"; // fixed 8 kHz high shelf
-
-    inline constexpr auto busACompRatio = "busA_compRatio";       // choice: 4:1 / 8:1
-    inline constexpr auto busACompThreshold = "busA_compThreshold";
-    inline constexpr auto busACompAttack = "busA_compAttack";
-    inline constexpr auto busACompRelease = "busA_compRelease";
-    inline constexpr auto busACompMakeup = "busA_compMakeup";
-
-    inline constexpr auto busADeessEnabled = "busA_deessEnabled";
-    inline constexpr auto busADeessFreq = "busA_deessFreq";
-    inline constexpr auto busADeessThreshold = "busA_deessThreshold";
-
-    inline constexpr auto busASatDrive = "busA_satDrive"; // 0 dB (parameter minimum) is a bit-exact bypass
-
-    inline constexpr auto busALevel = "busA_level";
-    inline constexpr auto busAMute = "busA_mute";
-    inline constexpr auto busASolo = "busA_solo";
+    // "VCA ride back" macro: offsets all four return faders simultaneously,
+    // -24...+6 dB.
+    inline constexpr auto parallelTrim = "parallel_trim";
 
     //==========================================================================
-    // Bus B - Opto sandwich: Passive EQ in -> Opto Leveler -> Passive Air out
-    inline constexpr auto busBLowBoostFreq = "busB_lowBoostFreq";   // choice: 60 Hz / 100 Hz
-    inline constexpr auto busBLowBoostGain = "busB_lowBoostGain";   // 0-10 dB, boost only
-    inline constexpr auto busBHighBoostFreq = "busB_highBoostFreq"; // choice: 8/10/12/16 kHz
-    inline constexpr auto busBHighBoostGain = "busB_highBoostGain"; // 0-10 dB, boost only
+    // Direct path (serial, every section optional, ALL OFF by default):
+    // De-Esser (pre) -> FET Comp light -> Console EQ -> Sat -> De-Esser (post)
+    inline constexpr auto directDeessPreEnabled = "direct_deessPre_enabled";
+    inline constexpr auto directDeessPreFreq = "direct_deessPre_freq";
+    inline constexpr auto directDeessPreThreshold = "direct_deessPre_threshold";
 
-    inline constexpr auto busBOptoReduction = "busB_optoReduction"; // 0-100%, 0% is a bit-exact bypass
-    inline constexpr auto busBOptoMakeup = "busB_optoMakeup";
+    inline constexpr auto directFetEnabled = "direct_fet_enabled";
+    inline constexpr auto directFetThreshold = "direct_fet_threshold";
+    inline constexpr auto directFetAttack = "direct_fet_attack";
+    inline constexpr auto directFetRelease = "direct_fet_release";
+    inline constexpr auto directFetMakeup = "direct_fet_makeup";
 
-    inline constexpr auto busBAirGain = "busB_airGain"; // fixed 12 kHz high shelf, 0-8 dB boost only
+    inline constexpr auto directEqHpfEnabled = "direct_eq_hpfEnabled";
+    inline constexpr auto directEqHpfFreq = "direct_eq_hpfFreq";       // choice: 50/80/160/300 Hz
+    inline constexpr auto directEqLowFreq = "direct_eq_lowFreq";       // choice: 35/60/110/220 Hz
+    inline constexpr auto directEqLowGain = "direct_eq_lowGain";
+    inline constexpr auto directEqMidFreq = "direct_eq_midFreq";       // choice: 360/700/1600/3200/4800/7200 Hz
+    inline constexpr auto directEqMidGain = "direct_eq_midGain";
+    inline constexpr auto directEqHighGain = "direct_eq_highGain";     // fixed 12 kHz shelf
+    inline constexpr auto directEqDrive = "direct_eq_drive";           // 2nd+3rd transformer-style harmonics
 
-    inline constexpr auto busBLevel = "busB_level";
-    inline constexpr auto busBMute = "busB_mute";
-    inline constexpr auto busBSolo = "busB_solo";
+    inline constexpr auto directSatDrive = "direct_sat_drive"; // 0 dB (parameter minimum) is a bit-exact bypass
+
+    inline constexpr auto directDeessPostEnabled = "direct_deessPost_enabled";
+    inline constexpr auto directDeessPostFreq = "direct_deessPost_freq";
+    inline constexpr auto directDeessPostThreshold = "direct_deessPost_threshold";
 
     //==========================================================================
-    // Bus C - Smash: FET Limiter, all-buttons character
-    inline constexpr auto busCAttack = "busC_attack";
-    inline constexpr auto busCRelease = "busC_release";
-    inline constexpr auto busCDrive = "busC_drive";
-    inline constexpr auto busCOutputTrim = "busC_outputTrim";
+    // Bus (1) CRUSH - FET limiter, all-buttons character
+    inline constexpr auto crushInput = "crush_input";     // 0-48 dB drive, no threshold knob
+    inline constexpr auto crushRatio = "crush_ratio";     // choice: 4:1/8:1/12:1/20:1/ALL
+    inline constexpr auto crushStyle = "crush_style";     // choice: All-Buttons / Gentle
+    inline constexpr auto crushAttack = "crush_attack";   // 1-7, inverted taper (7 = fastest)
+    inline constexpr auto crushRelease = "crush_release"; // 1-7, inverted taper (7 = fastest)
+    inline constexpr auto crushOutput = "crush_output";   // makeup trim
 
-    inline constexpr auto busCLevel = "busC_level";
-    inline constexpr auto busCMute = "busC_mute";
-    inline constexpr auto busCSolo = "busC_solo";
+    inline constexpr auto crushLevel = "crush_level";
+    inline constexpr auto crushMute = "crush_mute";
+    inline constexpr auto crushAudition = "crush_audition"; // exclusive - never call it "solo" (brief)
 
     //==========================================================================
-    // Bus D - Slap: fractional delay, filtered tape-soft feedback loop
-    inline constexpr auto busDDelayMs = "busD_delayMs";
-    inline constexpr auto busDFeedback = "busD_feedback";
-    inline constexpr auto busDHpFreq = "busD_hpFreq";
-    inline constexpr auto busDLpFreq = "busD_lpFreq";
-    inline constexpr auto busDMono = "busD_mono";
+    // Bus (2) SANDWICH - Passive EQ -> Opto Leveler -> Passive EQ
+    inline constexpr auto sandPreLfFreq = "sand_pre_lfFreq";   // choice: 20/30/60/100 Hz
+    inline constexpr auto sandPreLfBoost = "sand_pre_lfBoost"; // 0-10 dial
+    inline constexpr auto sandPreLfCut = "sand_pre_lfCut";     // 0-10 dial
+    inline constexpr auto sandPreHfBellFreq = "sand_pre_hfBellFreq";           // choice: 3/4/5/8/10/12/16 kHz
+    inline constexpr auto sandPreHfBellBoost = "sand_pre_hfBellBoost";         // 0-10 dial
+    inline constexpr auto sandPreHfBellBandwidth = "sand_pre_hfBellBandwidth"; // 0 (sharp) - 10 (broad)
+    inline constexpr auto sandPreHfShelfFreq = "sand_pre_hfShelfFreq";   // choice: 5/10/20 kHz
+    inline constexpr auto sandPreHfShelfAtten = "sand_pre_hfShelfAtten"; // 0-10 dial
 
-    inline constexpr auto busDLevel = "busD_level";
-    inline constexpr auto busDMute = "busD_mute";
-    inline constexpr auto busDSolo = "busD_solo";
+    inline constexpr auto sandPeakRed = "sand_peakred";   // 0-100%, drive into the fixed static curve
+    inline constexpr auto sandLimit = "sand_limit";       // knee ratio ~3:1 -> ~10:1
+    inline constexpr auto sandEmphasis = "sand_emphasis"; // 0-100%, detector-only HF-selective compression
+    inline constexpr auto sandResidual = "sand_residual"; // defeatable never-flat vintage residual, default ON
+
+    inline constexpr auto sandPostLfFreq = "sand_post_lfFreq";
+    inline constexpr auto sandPostLfBoost = "sand_post_lfBoost";
+    inline constexpr auto sandPostLfCut = "sand_post_lfCut";
+    inline constexpr auto sandPostHfBellFreq = "sand_post_hfBellFreq";
+    inline constexpr auto sandPostHfBellBoost = "sand_post_hfBellBoost";
+    inline constexpr auto sandPostHfBellBandwidth = "sand_post_hfBellBandwidth";
+    inline constexpr auto sandPostHfShelfFreq = "sand_post_hfShelfFreq";
+    inline constexpr auto sandPostHfShelfAtten = "sand_post_hfShelfAtten";
+
+    inline constexpr auto sandLevel = "sand_level";
+    inline constexpr auto sandMute = "sand_mute";
+    inline constexpr auto sandAudition = "sand_audition";
+
+    //==========================================================================
+    // Bus (3) SPREAD - dual micro-pitch, ~30/50 ms, L/R
+    inline constexpr auto spreadDetune = "spread_detune"; // +/- 0-15 cents, default 6
+    inline constexpr auto spreadTime = "spread_time";     // 0.5-2x scale on the 30/50 ms base delays
+    inline constexpr auto spreadWidth = "spread_width";   // 0-100%
+
+    inline constexpr auto spreadLevel = "spread_level";
+    inline constexpr auto spreadMute = "spread_mute";
+    inline constexpr auto spreadAudition = "spread_audition";
+
+    //==========================================================================
+    // Bus (4) SLAP - ~110 ms single-repeat dark delay
+    inline constexpr auto slapTime = "slap_time";     // 50-160 ms, default 110, plain ms (not tempo-synced)
+    inline constexpr auto slapStereo = "slap_stereo"; // false (mono return) is the default
+    inline constexpr auto slapTone = "slap_tone";     // 0-100%, dark...darker (BBD-style HF loss + soft sat)
+
+    inline constexpr auto slapLevel = "slap_level";
+    inline constexpr auto slapMute = "slap_mute";
+    inline constexpr auto slapAudition = "slap_audition";
 }

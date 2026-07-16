@@ -2,19 +2,17 @@
 
 MiserereEngine::MiserereEngine()
 {
-    // Bus C's fixed all-buttons voicing (brief): ~20:1 into a fixed
-    // threshold, mid-forward sidechain, program-dependent release. Drive is
-    // the user's "how hard" control - there is no threshold parameter.
-    smash.setRatio (smashRatio);
-    smash.setThresholdDb (smashThresholdDb);
-    smash.setSidechainTiltEnabled (true);
-    smash.setProgramDependentReleaseEnabled (true);
-
     // juce::dsp::Gain default-constructs its SmoothedValue at 0 (silence!) -
-    // prime both trims to unity so an engine that is prepared/processed
+    // prime the trims to unity so an engine that is prepared/processed
     // before any setter call (e.g. in isolation in tests) passes audio.
     inTrimGain.setGainLinear (1.0f);
     outTrimGain.setGainLinear (1.0f);
+}
+
+void MiserereEngine::setParallelTrimDb (float newTrimDb) noexcept
+{
+    lastParallelTrimDb = newTrimDb;
+    parallelTrimSmoothed.setTargetValue (juce::Decibels::decibelsToGain (newTrimDb));
 }
 
 void MiserereEngine::prepare (const juce::dsp::ProcessSpec& spec)
@@ -26,23 +24,26 @@ void MiserereEngine::prepare (const juce::dsp::ProcessSpec& spec)
     outTrimGain.setRampDurationSeconds (smoothingTimeSeconds);
     outTrimGain.prepare (spec);
 
-    hpf.prepare (spec);
+    parallelTrimSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    parallelTrimSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (lastParallelTrimDb));
+
+    deesserPre.prepare (spec);
+    directFet.prepare (spec);
     consoleEq.prepare (spec);
-    fetComp.prepare (spec);
-    deEsser.prepare (spec);
     tapeSat.prepare (spec);
+    deesserPost.prepare (spec);
 
-    passiveEqIn.prepare (spec);
+    crush.prepare (spec);
+    sandwichPreEq.prepare (spec);
     opto.prepare (spec);
-    passiveAirOut.prepare (spec);
-
-    smash.prepare (spec);
-
+    sandwichPostEq.prepare (spec);
+    spread.prepare (spec);
     slap.prepare (spec);
 
     const auto numChannels = static_cast<int> (spec.numChannels);
     const auto numSamples = static_cast<int> (spec.maximumBlockSize);
 
+    directBuffer.setSize (numChannels, numSamples);
     for (auto& buffer : busBuffers)
         buffer.setSize (numChannels, numSamples);
 
@@ -63,19 +64,18 @@ void MiserereEngine::reset()
     inTrimGain.reset();
     outTrimGain.reset();
 
-    hpf.reset();
+    deesserPre.reset();
+    directFet.reset();
     consoleEq.reset();
-    fetComp.reset();
-    deEsser.reset();
     tapeSat.reset();
+    deesserPost.reset();
 
-    passiveEqIn.reset();
+    crush.reset();
+    sandwichPreEq.reset();
     opto.reset();
-    passiveAirOut.reset();
-
-    smash.reset();
-
-    slap.reset(); // includes the full delay line - see SlapDelay::reset()
+    sandwichPostEq.reset();
+    spread.reset(); // includes both micro-pitch delay lines
+    slap.reset();   // includes the slap delay line
 }
 
 void MiserereEngine::setBusLevelDb (int busIndex, float levelDb) noexcept
@@ -97,10 +97,10 @@ void MiserereEngine::setBusMute (int busIndex, bool muted) noexcept
         busMuted[static_cast<size_t> (busIndex)] = muted;
 }
 
-void MiserereEngine::setBusSolo (int busIndex, bool soloed) noexcept
+void MiserereEngine::setBusAudition (int busIndex, bool auditioned) noexcept
 {
     if (busIndex >= 0 && busIndex < numBusses)
-        busSoloed[static_cast<size_t> (busIndex)] = soloed;
+        busAuditioned[static_cast<size_t> (busIndex)] = auditioned;
 }
 
 void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
@@ -110,11 +110,11 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     if (requestedSamples == 0)
         return;
 
-    // Defensive last-resort clamp to the bus-buffer capacity established in
+    // Defensive last-resort clamp to the buffer capacity established in
     // prepare() (PluginProcessor chunks oversized host blocks before they
     // reach here, so in practice this never trims - see processBlock()).
-    const auto numSamples = juce::jmin (requestedSamples, static_cast<size_t> (busBuffers[0].getNumSamples()));
-    const auto numChannels = juce::jmin (block.getNumChannels(), static_cast<size_t> (busBuffers[0].getNumChannels()));
+    const auto numSamples = juce::jmin (requestedSamples, static_cast<size_t> (directBuffer.getNumSamples()));
+    const auto numChannels = juce::jmin (block.getNumChannels(), static_cast<size_t> (directBuffer.getNumChannels()));
 
     if (numSamples == 0 || numChannels == 0)
         return;
@@ -124,7 +124,25 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     juce::dsp::ProcessContextReplacing<float> inputContext (workingBlock);
     inTrimGain.process (inputContext);
 
-    // Fan out: all four busses receive the identical trimmed input.
+    //==========================================================================
+    // Direct path (serial; every section optional, ALL OFF by default -
+    // the core "bit-transparent wire" invariant).
+    auto directBlock = juce::dsp::AudioBlock<float> (directBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
+    directBlock.copyFrom (workingBlock);
+
+    deesserPre.process (directBlock);
+
+    if (directFetEnabled)
+        directFet.process (directBlock);
+
+    consoleEq.process (directBlock);
+    tapeSat.process (directBlock);
+    deesserPost.process (directBlock);
+
+    //==========================================================================
+    // Fan out: all four parallel busses receive an identical unity-tap copy
+    // of the direct-path output (post-fader unity sends - the brief's
+    // core correction over v1).
     std::array<juce::dsp::AudioBlock<float>, numBusses> busBlocks {
         juce::dsp::AudioBlock<float> (busBuffers[0]).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels),
         juce::dsp::AudioBlock<float> (busBuffers[1]).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels),
@@ -133,50 +151,54 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     };
 
     for (auto& busBlock : busBlocks)
-        busBlock.copyFrom (workingBlock);
+        busBlock.copyFrom (directBlock);
 
-    // Bus A - Direct chain.
-    hpf.process (busBlocks[0]);
-    consoleEq.process (busBlocks[0]);
-    fetComp.process (busBlocks[0]);
-    deEsser.process (busBlocks[0]);
-    tapeSat.process (busBlocks[0]);
+    // (1) CRUSH.
+    crush.process (busBlocks[0]);
 
-    // Bus B - Opto sandwich.
-    passiveEqIn.process (busBlocks[1]);
+    // (2) SANDWICH: Passive EQ -> Opto Leveler -> Passive EQ.
+    sandwichPreEq.process (busBlocks[1]);
     opto.process (busBlocks[1]);
-    passiveAirOut.process (busBlocks[1]);
+    sandwichPostEq.process (busBlocks[1]);
 
-    // Bus C - Smash.
-    smash.process (busBlocks[2]);
+    // (3) SPREAD.
+    spread.process (busBlocks[2]);
 
-    // Bus D - Slap (wet-only output).
+    // (4) SLAP (wet-only output).
     slap.process (busBlocks[3]);
 
-    // Mute/Solo resolution (console semantics): Mute always wins; if any
-    // bus is soloed, only soloed (and unmuted) busses reach the sum. All
-    // bus DSP above ran unconditionally so envelopes/filters/delay stay
-    // continuous and unmuting never pops.
-    const bool anySoloed = busSoloed[0] || busSoloed[1] || busSoloed[2] || busSoloed[3];
+    //==========================================================================
+    // Mute/Audition resolution (console semantics): Mute always wins; if
+    // any bus is auditioned, ONLY the auditioned (unmuted) bus(ses) reach
+    // the sum, and the direct path itself is excluded too (Audition
+    // isolates exactly what it names). All bus DSP above ran
+    // unconditionally so envelopes/filters/delay lines stay continuous and
+    // unmuting never pops.
+    const bool anyAuditioned = busAuditioned[0] || busAuditioned[1] || busAuditioned[2] || busAuditioned[3];
+    const auto directRouteGain = anyAuditioned ? 0.0f : 1.0f;
 
     std::array<float, numBusses> routeGain {};
     for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
-        routeGain[bus] = (! busMuted[bus] && (! anySoloed || busSoloed[bus])) ? 1.0f : 0.0f;
+        routeGain[bus] = (! busMuted[bus] && (! anyAuditioned || busAuditioned[bus])) ? 1.0f : 0.0f;
 
-    // Sum the busses back into the working block (the host's own buffer
-    // memory), applying the per-sample smoothed fader gains, and sanitise
-    // any non-finite sample to 0 (see class comment).
+    // Sum the direct path and the four busses back into the working block
+    // (the host's own buffer memory), applying the per-sample-smoothed
+    // fader gains (each further scaled by the Parallel macro trim - the
+    // "VCA ride back" gesture), and sanitise any non-finite sample to 0.
     for (size_t sample = 0; sample < numSamples; ++sample)
     {
+        const auto parallelTrimNow = parallelTrimSmoothed.getNextValue();
+
         std::array<float, numBusses> faderGain {};
         for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
-            faderGain[bus] = busGainSmoothed[bus].getNextValue() * routeGain[bus];
+            faderGain[bus] = busGainSmoothed[bus].getNextValue() * routeGain[bus] * parallelTrimNow;
 
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
             auto* out = workingBlock.getChannelPointer (channel);
+            const auto directSample = directBlock.getChannelPointer (channel)[sample];
 
-            auto sum = 0.0f;
+            auto sum = directSample * directRouteGain;
             for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
                 sum += busBlocks[bus].getChannelPointer (channel)[sample] * faderGain[bus];
 

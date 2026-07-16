@@ -7,37 +7,32 @@
 
 #include <vector>
 
-// Bus D's slap delay: fractional delay 60-180 ms (default 110 ms), feedback
-// 0-30%, a bandpass (HP 200 Hz / LP 5 kHz defaults, tunable) plus soft tape
-// saturation inside the feedback loop, and a mono switch (brief).
+// Bus (4) SLAP (docs/design-brief.md): a single-repeat delay, 50-160 ms
+// (default 110 ms, deliberately NOT tempo-synced), with feedback FIXED at 0
+// in v2 (dropped as a user parameter entirely - see the "single repeat"
+// finding in docs/research-notes.md: "no feedback or filtering ever
+// mentioned - the darkness comes from the BBD emulation itself"). Mono
+// return by default (`slap_stereo` off).
 //
-// This bus outputs the WET (delayed) signal only - the dry voice is Bus A's
-// job in the parallel topology, so Bus D's fader is effectively the slap's
-// send/return level.
+// Because there is no feedback loop, the "progressively darker" BBD
+// character has to live in the single repeat itself: a fixed lowpass
+// character (tunable dark...darker via `slap_tone`) plus a soft, fixed
+// saturation are applied once to the delayed tap. This is a structural
+// difference from the v1 module (which voiced its character inside a
+// feedback loop that no longer exists).
 //
-// Loop structure, per channel:
+// This bus outputs the WET (delayed) signal only - the dry voice is the
+// Direct path's job in the v2 parallel topology, so this bus's fader is
+// effectively the slap's send/return level.
 //
-//   in -> [+] -> delay line -> out (wet)
-//          ^                     |
-//          |                     v
-//          +-- x fb <- sat <- LP <- HP   (feedback path)
+// Bus (4) is exempt from the busses-(1)/(2) sample-alignment invariant - it
+// is a delay BY DESIGN (see docs/adr/0003). It still reports zero
+// *latency*: the delay is the effect, not a compensation artefact.
 //
-// Each round trip through the loop is high-passed, low-passed and softly
-// saturated (a gentle fixed tanh drive - see TapeSaturator.h), so repeats
-// get progressively darker, thinner and softer like a worn tape echo. With
-// feedback capped at 30% and the saturator strictly non-expanding
-// (|tanh(gx)*comp| <= comp ~= 1.06 bounded), the loop is unconditionally
-// stable: even full-scale input decays geometrically (see
-// tests/SlapDelayTests.cpp's 10 s noise stability test).
-//
-// Bus D is the one bus exempt from the suite's sample-alignment discipline -
-// it is a delay BY DESIGN (see docs/adr/0003-parallel-bus-topology.md). It
-// still reports zero *latency*: the delay is the effect, not a compensation
-// artefact.
-//
-// Mono switch: when enabled, the delay is fed the mono sum of the input and
-// both output channels carry the identical echo - the classic mono tape
-// slap behind a stereo-widened vocal.
+// Stereo switch: when `slap_stereo` is OFF (default), the delay is fed the
+// mono sum of the input and both output channels carry the identical echo -
+// the classic mono tape slap behind a stereo-widened vocal. When ON, L/R
+// are delayed and voiced independently.
 class SlapDelay
 {
 public:
@@ -45,27 +40,36 @@ public:
 
     void prepare (const juce::dsp::ProcessSpec& spec);
 
-    // Clears the delay line and every loop filter/state - the M1 reset()
+    // Clears the delay line and every loop filter/state - the reset()
     // guarantee explicitly includes the delay line (a stale echo surviving
     // a transport stop is a shipped-bug class the suite has seen before).
     void reset();
 
     void setDelayMs (float newDelayMs) noexcept;
-    void setFeedbackProportion (float newFeedback01) noexcept; // 0..0.3
-    void setLoopHighPassHz (float newFrequencyHz) noexcept;
-    void setLoopLowPassHz (float newFrequencyHz) noexcept;
-    void setMonoEnabled (bool shouldBeMono) noexcept { monoEnabled = shouldBeMono; }
+    void setStereoEnabled (bool shouldBeStereo) noexcept { stereoEnabled = shouldBeStereo; }
+
+    // 0-1 (0-100%): dark...darker BBD-style voicing - scales both the
+    // repeat's lowpass darkening and its saturation drive.
+    void setToneProportion (float newAmount01) noexcept;
 
     // Replaces `block`'s contents with the wet (delayed) signal. A
     // zero-sample block is a safe no-op. No allocation occurs here.
     void process (juce::dsp::AudioBlock<float>& block) noexcept;
 
 private:
-    static constexpr float maxDelayMs = 180.0f;
-    static constexpr float minDelayMs = 60.0f;
-    // Gentle fixed tape-soft drive inside the loop (~+2.5 dB into tanh):
-    // enough to round repeat transients, far below distortion territory.
-    static constexpr float loopDriveLinear = 1.33f;
+    static constexpr float maxDelayMs = 160.0f;
+    static constexpr float minDelayMs = 50.0f;
+
+    // Tone range: the repeat's lowpass sweeps from a bright-ish 6 kHz (tone
+    // = 0) down to a properly dark 2.5 kHz (tone = 1), and saturation drive
+    // scales alongside it (brief: "gentle progressive HF loss (~3-5 kHz
+    // lowpass character) + soft saturation baked into the repeat").
+    static constexpr float toneLowPassBrightHz = 6000.0f;
+    static constexpr float toneLowPassDarkHz = 2500.0f;
+    static constexpr float toneSatDriveMin = 1.1f;
+    static constexpr float toneSatDriveMax = 1.8f;
+    static constexpr float loopFilterQ = 0.70710678f; // Butterworth
+
     static constexpr double smoothingTimeSeconds = 0.05;
     // Delay-time changes are smoothed much slower than other parameters so
     // dragging the Delay knob produces a mild tape-style pitch slur rather
@@ -73,29 +77,21 @@ private:
     static constexpr double delaySmoothingSeconds = 0.1;
 
     double sampleRate = 44100.0;
-    bool monoEnabled = false;
+    bool stereoEnabled = false;
 
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine;
 
-    // Per-channel 2nd-order loop filters; all channels share one
-    // coefficients object per filter type, updated once per block via
-    // ArrayCoefficients (see RealtimeCoefficients.h).
-    std::vector<juce::dsp::IIR::Filter<float>> loopHighPass;
-    std::vector<juce::dsp::IIR::Filter<float>> loopLowPass;
-    juce::dsp::IIR::Coefficients<float>::Ptr highPassCoefficients { msrr::makeIdentityBiquad() };
+    // Per-channel repeat-darkening lowpass; both channels share one
+    // coefficients object, updated once per block via ArrayCoefficients
+    // (see RealtimeCoefficients.h).
+    std::vector<juce::dsp::IIR::Filter<float>> repeatLowPass;
     juce::dsp::IIR::Coefficients<float>::Ptr lowPassCoefficients { msrr::makeIdentityBiquad() };
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayMsSmoothed;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> feedbackSmoothed;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> highPassSmoothed;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> lowPassSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> toneSmoothed;
 
     float lastDelayMs = 110.0f;
-    float lastFeedback01 = 0.15f;
-    float lastHighPassHz = 200.0f;
-    float lastLowPassHz = 5000.0f;
-
-    float loopSatCompensation = 1.0f;
+    float lastTone01 = 0.5f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SlapDelay)
 };
