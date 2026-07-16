@@ -3,6 +3,8 @@
 #include "params/ParameterIds.h"
 #include "params/ParameterLayout.h"
 
+#include <BinaryData.h>
+
 namespace
 {
     // Maps an AudioParameterChoice's raw (float) index into a concrete
@@ -36,6 +38,52 @@ namespace
     {
         return index == 0 ? FetCrush::Style::allButtons : FetCrush::Style::gentle;
     }
+
+    // The small, Miserere-specific config surface PresetManager needs (see
+    // src/presets/PresetManager.h's class docs) - everything else about the
+    // preset system is fully generic and portable to sibling plugins (see
+    // nave's docs/preset-system-notes.md, the M2 pilot's replication recipe).
+    basilica::presets::PresetManagerConfig makePresetManagerConfig()
+    {
+        // JucePlugin_CFBundleIdentifier expands to a raw (unquoted) token
+        // sequence, not a string literal - JUCE_STRINGIFY() is the
+        // documented way to turn it into one. This is always
+        // "com.yvesvogl.miserere" here (BUNDLE_ID in CMakeLists.txt),
+        // matching the "plugin" field baked into every
+        // presets/factory/*.json file.
+        basilica::presets::PresetManagerConfig config;
+        config.pluginId = JUCE_STRINGIFY (JucePlugin_CFBundleIdentifier);
+        config.pluginName = JucePlugin_Name;
+        config.manufacturerName = "Yves Vogl";
+        config.pluginVersion = JucePlugin_VersionString;
+        // userPresetsDirectoryOverrideForTests intentionally left
+        // default-constructed (empty) - production instances always use the
+        // real platform-standard preset location (see PresetManager.h):
+        // ~/Library/Audio/Presets/Yves Vogl/Miserere/ on macOS.
+        return config;
+    }
+
+    // BinaryData symbol names are derived from the presets/factory/*.json
+    // file names passed to juce_add_binary_data() in CMakeLists.txt (dots
+    // become underscores) - this list must stay in sync with that SOURCES
+    // list. Order here only affects factory-preset iteration order before
+    // getAllPresets() re-sorts alphabetically, so it isn't otherwise
+    // significant.
+    std::vector<basilica::presets::FactoryPresetAsset> makeFactoryPresetAssets()
+    {
+        return {
+            { BinaryData::default_json, BinaryData::default_jsonSize },
+            { BinaryData::classicParallelBlend_json, BinaryData::classicParallelBlend_jsonSize },
+            { BinaryData::crushForward_json, BinaryData::crushForward_jsonSize },
+            { BinaryData::silkSandwich_json, BinaryData::silkSandwich_jsonSize },
+            { BinaryData::wideAndWet_json, BinaryData::wideAndWet_jsonSize },
+            { BinaryData::directChannelOnly_json, BinaryData::directChannelOnly_jsonSize },
+            { BinaryData::gentleBus_json, BinaryData::gentleBus_jsonSize },
+            { BinaryData::roughMixGlue_json, BinaryData::roughMixGlue_jsonSize },
+            { BinaryData::whisperThicken_json, BinaryData::whisperThicken_jsonSize },
+            { BinaryData::aggressiveRockVocal_json, BinaryData::aggressiveRockVocal_jsonSize },
+        };
+    }
 }
 
 //==============================================================================
@@ -43,7 +91,8 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
+      presetManager (apvts, makePresetManagerConfig(), makeFactoryPresetAssets())
 {
     inTrimDb = apvts.getRawParameterValue (ParamIDs::inTrim);
     outTrimDb = apvts.getRawParameterValue (ParamIDs::outTrim);
@@ -150,6 +199,14 @@ MiserereAudioProcessor::MiserereAudioProcessor()
         jassert (busMuteFlag[static_cast<size_t> (bus)] != nullptr);
         jassert (busAuditionFlag[static_cast<size_t> (bus)] != nullptr);
     }
+
+    // M2 default resolution: user "Default" preset > factory "Default"
+    // preset > the ParameterLayout defaults apvts was just constructed
+    // with above (see PresetManager::applyStartupDefault()'s docs). The
+    // factory "Default" preset (presets/factory/default.json) mirrors the
+    // ParameterLayout defaults exactly, so this is a no-op on a machine
+    // with no user presets yet.
+    presetManager.applyStartupDefault();
 }
 
 MiserereAudioProcessor::~MiserereAudioProcessor()

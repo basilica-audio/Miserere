@@ -1,6 +1,9 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "params/ParameterIds.h"
+#include "presets/Localisation.h"
+
+#include <BinaryData.h>
 
 namespace
 {
@@ -11,14 +14,35 @@ namespace
     constexpr int margin = 12;
     constexpr int slotWidth = knobSize + margin / 2;
     constexpr int toggleWidth = 70;
+    constexpr int presetBarHeight = 28;
     constexpr int rowHeight = headerHeight + labelHeight + knobSize + textBoxHeight + margin;
     constexpr int editorWidth = margin * 2 + 10 * slotWidth; // widest row has 10 control slots
+
+    // M2 i18n frame (.scaffold/specs/preset-system-m2.md): selects German
+    // (resources/i18n/de.txt) or falls through to English, once, at editor
+    // construction - see Localisation.h's docs. `presetBar` is a member
+    // initialised via the constructor's initialiser list, and its own
+    // constructor already calls TRANS() on every button label - member
+    // initialisers run in declaration order regardless of the order
+    // they're written in, so this helper (called from presetBar's own
+    // initialiser expression below) is what actually guarantees
+    // installLocalisation() runs before presetBar exists, not an
+    // installLocalisation() call in the constructor *body*, which would run
+    // too late.
+    basilica::presets::PresetManager& initLocalisationThenGetPresetManager (MiserereAudioProcessor& processor)
+    {
+        basilica::presets::installLocalisation (BinaryData::de_txt, BinaryData::de_txtSize);
+        return processor.presetManager;
+    }
 }
 
 MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcessor& processorToEdit)
     : juce::AudioProcessorEditor (&processorToEdit),
-      audioProcessor (processorToEdit)
+      audioProcessor (processorToEdit),
+      presetBar (initLocalisationThenGetPresetManager (processorToEdit))
 {
+    addAndMakeVisible (presetBar);
+
     // Global strip.
     auto& global = addSection ("Global");
     addKnob (global, ParamIDs::inTrim, "In Trim");
@@ -112,7 +136,7 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addToggle (slap, ParamIDs::slapMute, "Mute");
     addToggle (slap, ParamIDs::slapAudition, "Audition");
 
-    requiredHeight = margin * 2 + static_cast<int> (sections.size()) * rowHeight;
+    requiredHeight = margin * 2 + presetBarHeight + margin + static_cast<int> (sections.size()) * rowHeight;
 
     setResizable (false, false);
     setSize (editorWidth, requiredHeight);
@@ -207,6 +231,9 @@ void MiserereAudioProcessorEditor::paint (juce::Graphics& g)
 void MiserereAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (margin);
+
+    presetBar.setBounds (bounds.removeFromTop (presetBarHeight));
+    bounds.removeFromTop (margin);
 
     for (auto& section : sections)
     {

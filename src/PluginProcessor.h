@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "dsp/MiserereEngine.h"
+#include "presets/PresetManager.h"
 
 // Miserere v2: the parallel vocal template - a Direct (serial, all-off-by-
 // default) path plus four parallel return busses (Crush, Sandwich, Spread,
@@ -58,6 +59,14 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
+
+    // M2 preset system (.scaffold/specs/preset-system-m2.md,
+    // src/presets/PresetManager.h). Constructed after apvts (its
+    // constructor registers APVTS parameter listeners) and public so
+    // MiserereAudioProcessorEditor's PresetBar can talk to it directly -
+    // the same "processor owns it, editor references it" pattern apvts
+    // itself already uses.
+    basilica::presets::PresetManager presetManager;
 
     // GR metering values for a future GUI and for tests.
     float getDirectFetGainReductionDb() const noexcept { return engine.getDirectFetGainReductionDb(); }

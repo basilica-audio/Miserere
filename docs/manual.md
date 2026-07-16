@@ -1,4 +1,4 @@
-# Miserere — user manual (v0.2.0)
+# Miserere — user manual (v0.3.0)
 
 *Four voices, one prayer — the parallel vocal template in a single unit.*
 
@@ -111,6 +111,17 @@ to independent L/R delays.
 - **Parallel** is a macro trim (−24…+6 dB) that offsets all four return faders together — the
   "VCA ride back" gesture for quickly backing off the whole parallel layer.
 
+## Presets
+
+A preset bar sits at the top of the editor: `[<] [PresetName*] [>] [Save] [Save As...]
+[Delete] [Import...] [Export...]`. Clicking the preset name opens a Factory/User menu; a
+trailing `*` means the current preset has unsaved changes. Ten factory presets ship in the
+box (see `presets.md` for what each one is for); user presets save to
+`~/Library/Audio/Presets/Yves Vogl/Miserere/` on macOS (`%APPDATA%/Yves Vogl/Miserere/Presets/`
+on Windows). The preset menu's "Set current as default" makes any preset — factory or user —
+load automatically on every fresh instance; "Import..." accepts both single preset files and
+zip preset banks.
+
 ## Starter recipe
 
 1. Leave the Direct path off, or add De-Ess Pre / a touch of Console EQ if the source needs
@@ -125,11 +136,10 @@ to independent L/R delays.
    gone when you mute it" test — if either is audible as a discrete effect, pull it back.
 5. Use **Parallel** to back the whole layer off quickly on quieter/more organic material.
 
-## Known limitations (v0.2.0)
+## Known limitations (v0.3.0)
 
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
-  milestone M3).
-- No factory presets yet (M2).
+  milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
   preset, swappable compressor colours beyond the two CRUSH styles, external sidechain, an
   output limiter.
