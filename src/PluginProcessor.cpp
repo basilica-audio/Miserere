@@ -14,6 +14,28 @@ namespace
                                           static_cast<int> (rawIndex->load (std::memory_order_relaxed)));
         return table[static_cast<size_t> (index)];
     }
+
+    int choiceIndex (const std::atomic<float>* rawIndex) noexcept
+    {
+        return static_cast<int> (rawIndex->load (std::memory_order_relaxed));
+    }
+
+    FetCrush::Ratio crushRatioFromIndex (int index) noexcept
+    {
+        switch (index)
+        {
+            case 0: return FetCrush::Ratio::r4;
+            case 1: return FetCrush::Ratio::r8;
+            case 2: return FetCrush::Ratio::r12;
+            case 3: return FetCrush::Ratio::r20;
+            default: return FetCrush::Ratio::rAll;
+        }
+    }
+
+    FetCrush::Style crushStyleFromIndex (int index) noexcept
+    {
+        return index == 0 ? FetCrush::Style::allButtons : FetCrush::Style::gentle;
+    }
 }
 
 //==============================================================================
@@ -27,89 +49,115 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     outTrimDb = apvts.getRawParameterValue (ParamIDs::outTrim);
     bypassFlag = apvts.getRawParameterValue (ParamIDs::bypass);
     bypassParameter = apvts.getParameter (ParamIDs::bypass);
+    linkFlag = apvts.getRawParameterValue (ParamIDs::link);
+    parallelTrimDb = apvts.getRawParameterValue (ParamIDs::parallelTrim);
 
-    busAHpfEnabled = apvts.getRawParameterValue (ParamIDs::busAHpfEnabled);
-    busAHpfFreq = apvts.getRawParameterValue (ParamIDs::busAHpfFreq);
-    busAEqLowGain = apvts.getRawParameterValue (ParamIDs::busAEqLowGain);
-    busAEqMidFreq = apvts.getRawParameterValue (ParamIDs::busAEqMidFreq);
-    busAEqMidGain = apvts.getRawParameterValue (ParamIDs::busAEqMidGain);
-    busAEqMidQ = apvts.getRawParameterValue (ParamIDs::busAEqMidQ);
-    busAEqHighGain = apvts.getRawParameterValue (ParamIDs::busAEqHighGain);
-    busACompRatio = apvts.getRawParameterValue (ParamIDs::busACompRatio);
-    busACompThreshold = apvts.getRawParameterValue (ParamIDs::busACompThreshold);
-    busACompAttack = apvts.getRawParameterValue (ParamIDs::busACompAttack);
-    busACompRelease = apvts.getRawParameterValue (ParamIDs::busACompRelease);
-    busACompMakeup = apvts.getRawParameterValue (ParamIDs::busACompMakeup);
-    busADeessEnabled = apvts.getRawParameterValue (ParamIDs::busADeessEnabled);
-    busADeessFreq = apvts.getRawParameterValue (ParamIDs::busADeessFreq);
-    busADeessThreshold = apvts.getRawParameterValue (ParamIDs::busADeessThreshold);
-    busASatDrive = apvts.getRawParameterValue (ParamIDs::busASatDrive);
+    directDeessPreEnabled = apvts.getRawParameterValue (ParamIDs::directDeessPreEnabled);
+    directDeessPreFreq = apvts.getRawParameterValue (ParamIDs::directDeessPreFreq);
+    directDeessPreThreshold = apvts.getRawParameterValue (ParamIDs::directDeessPreThreshold);
+    directFetEnabled = apvts.getRawParameterValue (ParamIDs::directFetEnabled);
+    directFetThreshold = apvts.getRawParameterValue (ParamIDs::directFetThreshold);
+    directFetAttack = apvts.getRawParameterValue (ParamIDs::directFetAttack);
+    directFetRelease = apvts.getRawParameterValue (ParamIDs::directFetRelease);
+    directFetMakeup = apvts.getRawParameterValue (ParamIDs::directFetMakeup);
+    directEqHpfEnabled = apvts.getRawParameterValue (ParamIDs::directEqHpfEnabled);
+    directEqHpfFreq = apvts.getRawParameterValue (ParamIDs::directEqHpfFreq);
+    directEqLowFreq = apvts.getRawParameterValue (ParamIDs::directEqLowFreq);
+    directEqLowGain = apvts.getRawParameterValue (ParamIDs::directEqLowGain);
+    directEqMidFreq = apvts.getRawParameterValue (ParamIDs::directEqMidFreq);
+    directEqMidGain = apvts.getRawParameterValue (ParamIDs::directEqMidGain);
+    directEqHighGain = apvts.getRawParameterValue (ParamIDs::directEqHighGain);
+    directEqDrive = apvts.getRawParameterValue (ParamIDs::directEqDrive);
+    directSatDrive = apvts.getRawParameterValue (ParamIDs::directSatDrive);
+    directDeessPostEnabled = apvts.getRawParameterValue (ParamIDs::directDeessPostEnabled);
+    directDeessPostFreq = apvts.getRawParameterValue (ParamIDs::directDeessPostFreq);
+    directDeessPostThreshold = apvts.getRawParameterValue (ParamIDs::directDeessPostThreshold);
 
-    busBLowBoostFreq = apvts.getRawParameterValue (ParamIDs::busBLowBoostFreq);
-    busBLowBoostGain = apvts.getRawParameterValue (ParamIDs::busBLowBoostGain);
-    busBHighBoostFreq = apvts.getRawParameterValue (ParamIDs::busBHighBoostFreq);
-    busBHighBoostGain = apvts.getRawParameterValue (ParamIDs::busBHighBoostGain);
-    busBOptoReduction = apvts.getRawParameterValue (ParamIDs::busBOptoReduction);
-    busBOptoMakeup = apvts.getRawParameterValue (ParamIDs::busBOptoMakeup);
-    busBAirGain = apvts.getRawParameterValue (ParamIDs::busBAirGain);
+    crushInput = apvts.getRawParameterValue (ParamIDs::crushInput);
+    crushRatio = apvts.getRawParameterValue (ParamIDs::crushRatio);
+    crushStyle = apvts.getRawParameterValue (ParamIDs::crushStyle);
+    crushAttack = apvts.getRawParameterValue (ParamIDs::crushAttack);
+    crushRelease = apvts.getRawParameterValue (ParamIDs::crushRelease);
+    crushOutput = apvts.getRawParameterValue (ParamIDs::crushOutput);
 
-    busCAttack = apvts.getRawParameterValue (ParamIDs::busCAttack);
-    busCRelease = apvts.getRawParameterValue (ParamIDs::busCRelease);
-    busCDrive = apvts.getRawParameterValue (ParamIDs::busCDrive);
-    busCOutputTrim = apvts.getRawParameterValue (ParamIDs::busCOutputTrim);
+    sandPreLfFreq = apvts.getRawParameterValue (ParamIDs::sandPreLfFreq);
+    sandPreLfBoost = apvts.getRawParameterValue (ParamIDs::sandPreLfBoost);
+    sandPreLfCut = apvts.getRawParameterValue (ParamIDs::sandPreLfCut);
+    sandPreHfBellFreq = apvts.getRawParameterValue (ParamIDs::sandPreHfBellFreq);
+    sandPreHfBellBoost = apvts.getRawParameterValue (ParamIDs::sandPreHfBellBoost);
+    sandPreHfBellBandwidth = apvts.getRawParameterValue (ParamIDs::sandPreHfBellBandwidth);
+    sandPreHfShelfFreq = apvts.getRawParameterValue (ParamIDs::sandPreHfShelfFreq);
+    sandPreHfShelfAtten = apvts.getRawParameterValue (ParamIDs::sandPreHfShelfAtten);
+    sandPeakRed = apvts.getRawParameterValue (ParamIDs::sandPeakRed);
+    sandLimit = apvts.getRawParameterValue (ParamIDs::sandLimit);
+    sandEmphasis = apvts.getRawParameterValue (ParamIDs::sandEmphasis);
+    sandResidual = apvts.getRawParameterValue (ParamIDs::sandResidual);
+    sandPostLfFreq = apvts.getRawParameterValue (ParamIDs::sandPostLfFreq);
+    sandPostLfBoost = apvts.getRawParameterValue (ParamIDs::sandPostLfBoost);
+    sandPostLfCut = apvts.getRawParameterValue (ParamIDs::sandPostLfCut);
+    sandPostHfBellFreq = apvts.getRawParameterValue (ParamIDs::sandPostHfBellFreq);
+    sandPostHfBellBoost = apvts.getRawParameterValue (ParamIDs::sandPostHfBellBoost);
+    sandPostHfBellBandwidth = apvts.getRawParameterValue (ParamIDs::sandPostHfBellBandwidth);
+    sandPostHfShelfFreq = apvts.getRawParameterValue (ParamIDs::sandPostHfShelfFreq);
+    sandPostHfShelfAtten = apvts.getRawParameterValue (ParamIDs::sandPostHfShelfAtten);
 
-    busDDelayMs = apvts.getRawParameterValue (ParamIDs::busDDelayMs);
-    busDFeedback = apvts.getRawParameterValue (ParamIDs::busDFeedback);
-    busDHpFreq = apvts.getRawParameterValue (ParamIDs::busDHpFreq);
-    busDLpFreq = apvts.getRawParameterValue (ParamIDs::busDLpFreq);
-    busDMono = apvts.getRawParameterValue (ParamIDs::busDMono);
+    spreadDetune = apvts.getRawParameterValue (ParamIDs::spreadDetune);
+    spreadTime = apvts.getRawParameterValue (ParamIDs::spreadTime);
+    spreadWidth = apvts.getRawParameterValue (ParamIDs::spreadWidth);
 
-    static constexpr const char* levelIds[] = { ParamIDs::busALevel, ParamIDs::busBLevel, ParamIDs::busCLevel, ParamIDs::busDLevel };
-    static constexpr const char* muteIds[] = { ParamIDs::busAMute, ParamIDs::busBMute, ParamIDs::busCMute, ParamIDs::busDMute };
-    static constexpr const char* soloIds[] = { ParamIDs::busASolo, ParamIDs::busBSolo, ParamIDs::busCSolo, ParamIDs::busDSolo };
+    slapTime = apvts.getRawParameterValue (ParamIDs::slapTime);
+    slapStereo = apvts.getRawParameterValue (ParamIDs::slapStereo);
+    slapTone = apvts.getRawParameterValue (ParamIDs::slapTone);
+
+    static constexpr const char* levelIds[] = { ParamIDs::crushLevel, ParamIDs::sandLevel, ParamIDs::spreadLevel, ParamIDs::slapLevel };
+    static constexpr const char* muteIds[] = { ParamIDs::crushMute, ParamIDs::sandMute, ParamIDs::spreadMute, ParamIDs::slapMute };
+    static constexpr const char* auditionIds[] = { ParamIDs::crushAudition, ParamIDs::sandAudition, ParamIDs::spreadAudition, ParamIDs::slapAudition };
 
     for (int bus = 0; bus < MiserereEngine::numBusses; ++bus)
     {
         busLevelDb[static_cast<size_t> (bus)] = apvts.getRawParameterValue (levelIds[bus]);
         busMuteFlag[static_cast<size_t> (bus)] = apvts.getRawParameterValue (muteIds[bus]);
-        busSoloFlag[static_cast<size_t> (bus)] = apvts.getRawParameterValue (soloIds[bus]);
+        busAuditionFlag[static_cast<size_t> (bus)] = apvts.getRawParameterValue (auditionIds[bus]);
 
-        // Solo exclusivity listener (see parameterChanged()).
-        apvts.addParameterListener (soloIds[bus], this);
+        // Audition exclusivity listener (see parameterChanged()).
+        apvts.addParameterListener (auditionIds[bus], this);
     }
 
-    jassert (inTrimDb != nullptr);
-    jassert (outTrimDb != nullptr);
-    jassert (bypassFlag != nullptr);
-    jassert (bypassParameter != nullptr);
-    jassert (busAHpfEnabled != nullptr && busAHpfFreq != nullptr);
-    jassert (busAEqLowGain != nullptr && busAEqMidFreq != nullptr && busAEqMidGain != nullptr);
-    jassert (busAEqMidQ != nullptr && busAEqHighGain != nullptr);
-    jassert (busACompRatio != nullptr && busACompThreshold != nullptr && busACompAttack != nullptr);
-    jassert (busACompRelease != nullptr && busACompMakeup != nullptr);
-    jassert (busADeessEnabled != nullptr && busADeessFreq != nullptr && busADeessThreshold != nullptr);
-    jassert (busASatDrive != nullptr);
-    jassert (busBLowBoostFreq != nullptr && busBLowBoostGain != nullptr);
-    jassert (busBHighBoostFreq != nullptr && busBHighBoostGain != nullptr);
-    jassert (busBOptoReduction != nullptr && busBOptoMakeup != nullptr && busBAirGain != nullptr);
-    jassert (busCAttack != nullptr && busCRelease != nullptr && busCDrive != nullptr && busCOutputTrim != nullptr);
-    jassert (busDDelayMs != nullptr && busDFeedback != nullptr && busDHpFreq != nullptr);
-    jassert (busDLpFreq != nullptr && busDMono != nullptr);
+    jassert (inTrimDb != nullptr && outTrimDb != nullptr && bypassFlag != nullptr && bypassParameter != nullptr);
+    jassert (linkFlag != nullptr && parallelTrimDb != nullptr);
+    jassert (directDeessPreEnabled != nullptr && directDeessPreFreq != nullptr && directDeessPreThreshold != nullptr);
+    jassert (directFetEnabled != nullptr && directFetThreshold != nullptr && directFetAttack != nullptr);
+    jassert (directFetRelease != nullptr && directFetMakeup != nullptr);
+    jassert (directEqHpfEnabled != nullptr && directEqHpfFreq != nullptr && directEqLowFreq != nullptr);
+    jassert (directEqLowGain != nullptr && directEqMidFreq != nullptr && directEqMidGain != nullptr);
+    jassert (directEqHighGain != nullptr && directEqDrive != nullptr && directSatDrive != nullptr);
+    jassert (directDeessPostEnabled != nullptr && directDeessPostFreq != nullptr && directDeessPostThreshold != nullptr);
+    jassert (crushInput != nullptr && crushRatio != nullptr && crushStyle != nullptr);
+    jassert (crushAttack != nullptr && crushRelease != nullptr && crushOutput != nullptr);
+    jassert (sandPreLfFreq != nullptr && sandPreLfBoost != nullptr && sandPreLfCut != nullptr);
+    jassert (sandPreHfBellFreq != nullptr && sandPreHfBellBoost != nullptr && sandPreHfBellBandwidth != nullptr);
+    jassert (sandPreHfShelfFreq != nullptr && sandPreHfShelfAtten != nullptr);
+    jassert (sandPeakRed != nullptr && sandLimit != nullptr && sandEmphasis != nullptr && sandResidual != nullptr);
+    jassert (sandPostLfFreq != nullptr && sandPostLfBoost != nullptr && sandPostLfCut != nullptr);
+    jassert (sandPostHfBellFreq != nullptr && sandPostHfBellBoost != nullptr && sandPostHfBellBandwidth != nullptr);
+    jassert (sandPostHfShelfFreq != nullptr && sandPostHfShelfAtten != nullptr);
+    jassert (spreadDetune != nullptr && spreadTime != nullptr && spreadWidth != nullptr);
+    jassert (slapTime != nullptr && slapStereo != nullptr && slapTone != nullptr);
 
     for (int bus = 0; bus < MiserereEngine::numBusses; ++bus)
     {
         jassert (busLevelDb[static_cast<size_t> (bus)] != nullptr);
         jassert (busMuteFlag[static_cast<size_t> (bus)] != nullptr);
-        jassert (busSoloFlag[static_cast<size_t> (bus)] != nullptr);
+        jassert (busAuditionFlag[static_cast<size_t> (bus)] != nullptr);
     }
 }
 
 MiserereAudioProcessor::~MiserereAudioProcessor()
 {
-    static constexpr const char* soloIds[] = { ParamIDs::busASolo, ParamIDs::busBSolo, ParamIDs::busCSolo, ParamIDs::busDSolo };
+    static constexpr const char* auditionIds[] = { ParamIDs::crushAudition, ParamIDs::sandAudition, ParamIDs::spreadAudition, ParamIDs::slapAudition };
 
-    for (const auto* soloId : soloIds)
-        apvts.removeParameterListener (soloId, this);
+    for (const auto* auditionId : auditionIds)
+        apvts.removeParameterListener (auditionId, this);
 }
 
 //==============================================================================
@@ -121,31 +169,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout MiserereAudioProcessor::crea
 //==============================================================================
 void MiserereAudioProcessor::parameterChanged (const juce::String& parameterId, float newValue)
 {
-    // Solo exclusivity: when a solo engages, release every other bus's
-    // solo. The guard stops the setValueNotifyingHost() cascade from
-    // re-entering this handler for the solos being cleared.
+    // Audition exclusivity: when an audition engages, release every other
+    // bus's audition. The guard stops the setValueNotifyingHost() cascade
+    // from re-entering this handler for the auditions being cleared.
     //
     // Known limitation (documented in docs/architecture.md): if a host
-    // automates two solos on in the same gesture, this listener resolves
-    // them in callback order - fine for the intended "click Solo on a
-    // different bus" workflow, and the engine stays well-defined for any
-    // combination regardless.
-    if (newValue < 0.5f || soloExclusivityGuard.exchange (true))
+    // automates two auditions on in the same gesture, this listener
+    // resolves them in callback order - fine for the intended "click
+    // Audition on a different bus" workflow, and the engine stays
+    // well-defined for any combination regardless.
+    if (newValue < 0.5f || auditionExclusivityGuard.exchange (true))
         return;
 
-    static constexpr const char* soloIds[] = { ParamIDs::busASolo, ParamIDs::busBSolo, ParamIDs::busCSolo, ParamIDs::busDSolo };
+    static constexpr const char* auditionIds[] = { ParamIDs::crushAudition, ParamIDs::sandAudition, ParamIDs::spreadAudition, ParamIDs::slapAudition };
 
-    for (const auto* soloId : soloIds)
+    for (const auto* auditionId : auditionIds)
     {
-        if (parameterId == soloId)
+        if (parameterId == auditionId)
             continue;
 
-        if (auto* param = apvts.getParameter (soloId))
+        if (auto* param = apvts.getParameter (auditionId))
             if (param->getValue() >= 0.5f)
                 param->setValueNotifyingHost (0.0f);
     }
 
-    soloExclusivityGuard.store (false);
+    auditionExclusivityGuard.store (false);
 }
 
 //==============================================================================
@@ -171,10 +219,9 @@ bool MiserereAudioProcessor::isMidiEffect() const
 
 double MiserereAudioProcessor::getTailLengthSeconds() const
 {
-    // Bus D's slap can keep ringing after the input stops: worst case is
-    // the maximum 180 ms delay with maximum (30%) feedback - after five
-    // round trips (0.3^5 < 0.25%) the tail is far below audibility, so a
-    // conservative 1 second covers it comfortably.
+    // Bus (4) SLAP can keep ringing after the input stops: the worst case is
+    // the maximum 160 ms delay plus its repeat's own decay - a conservative
+    // 1 second covers it comfortably.
     return 1.0;
 }
 
@@ -209,46 +256,77 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
 
     engine.setInTrimDb (load (inTrimDb));
     engine.setOutTrimDb (load (outTrimDb));
+    engine.setLinked (loadBool (linkFlag));
+    engine.setParallelTrimDb (load (parallelTrimDb));
 
-    engine.setHpfEnabled (loadBool (busAHpfEnabled));
-    engine.setHpfFreqHz (load (busAHpfFreq));
-    engine.setEqLowGainDb (load (busAEqLowGain));
-    engine.setEqMidFreqHz (load (busAEqMidFreq));
-    engine.setEqMidGainDb (load (busAEqMidGain));
-    engine.setEqMidQ (load (busAEqMidQ));
-    engine.setEqHighGainDb (load (busAEqHighGain));
-    engine.setCompRatio (choiceToValue (busACompRatio, msrr::compRatioValues));
-    engine.setCompThresholdDb (load (busACompThreshold));
-    engine.setCompAttackMs (load (busACompAttack));
-    engine.setCompReleaseMs (load (busACompRelease));
-    engine.setCompMakeupDb (load (busACompMakeup));
-    engine.setDeessEnabled (loadBool (busADeessEnabled));
-    engine.setDeessFreqHz (load (busADeessFreq));
-    engine.setDeessThresholdDb (load (busADeessThreshold));
-    engine.setSatDriveDb (load (busASatDrive));
+    engine.setDeessPreEnabled (loadBool (directDeessPreEnabled));
+    engine.setDeessPreFreqHz (load (directDeessPreFreq));
+    engine.setDeessPreThresholdDb (load (directDeessPreThreshold));
 
-    engine.setPassiveLowBoost (choiceToValue (busBLowBoostFreq, msrr::busBLowBoostFreqHz), load (busBLowBoostGain));
-    engine.setPassiveHighBoost (choiceToValue (busBHighBoostFreq, msrr::busBHighBoostFreqHz), load (busBHighBoostGain));
-    engine.setOptoPeakReduction (load (busBOptoReduction) * 0.01f);
-    engine.setOptoMakeupDb (load (busBOptoMakeup));
-    engine.setPassiveAirGainDb (load (busBAirGain));
+    engine.setDirectFetEnabled (loadBool (directFetEnabled));
+    engine.setDirectFetThresholdDb (load (directFetThreshold));
+    engine.setDirectFetAttackMs (load (directFetAttack));
+    engine.setDirectFetReleaseMs (load (directFetRelease));
+    engine.setDirectFetMakeupDb (load (directFetMakeup));
 
-    engine.setSmashAttackMs (load (busCAttack));
-    engine.setSmashReleaseMs (load (busCRelease));
-    engine.setSmashDriveDb (load (busCDrive));
-    engine.setSmashOutputTrimDb (load (busCOutputTrim));
+    engine.setEqHpfEnabled (loadBool (directEqHpfEnabled));
+    engine.setEqHpfFreqHz (choiceToValue (directEqHpfFreq, msrr::eqHpfFreqHz));
+    engine.setEqLowFreqHz (choiceToValue (directEqLowFreq, msrr::eqLowFreqHz));
+    engine.setEqLowGainDb (load (directEqLowGain));
+    engine.setEqMidFreqHz (choiceToValue (directEqMidFreq, msrr::eqMidFreqHz));
+    engine.setEqMidGainDb (load (directEqMidGain));
+    engine.setEqHighGainDb (load (directEqHighGain));
+    engine.setEqDriveDb (load (directEqDrive));
 
-    engine.setSlapDelayMs (load (busDDelayMs));
-    engine.setSlapFeedback (load (busDFeedback) * 0.01f);
-    engine.setSlapLoopHighPassHz (load (busDHpFreq));
-    engine.setSlapLoopLowPassHz (load (busDLpFreq));
-    engine.setSlapMonoEnabled (loadBool (busDMono));
+    engine.setSatDriveDb (load (directSatDrive));
+
+    engine.setDeessPostEnabled (loadBool (directDeessPostEnabled));
+    engine.setDeessPostFreqHz (load (directDeessPostFreq));
+    engine.setDeessPostThresholdDb (load (directDeessPostThreshold));
+
+    engine.setCrushInputDriveDb (load (crushInput));
+    engine.setCrushRatio (crushRatioFromIndex (choiceIndex (crushRatio)));
+    engine.setCrushStyle (crushStyleFromIndex (choiceIndex (crushStyle)));
+    engine.setCrushAttackStep (load (crushAttack));
+    engine.setCrushReleaseStep (load (crushRelease));
+    engine.setCrushOutputTrimDb (load (crushOutput));
+
+    engine.setSandPreLfFreqHz (choiceToValue (sandPreLfFreq, msrr::sandLfFreqHz));
+    engine.setSandPreLfBoostDial (load (sandPreLfBoost));
+    engine.setSandPreLfCutDial (load (sandPreLfCut));
+    engine.setSandPreHfBellFreqHz (choiceToValue (sandPreHfBellFreq, msrr::sandHfBellFreqHz));
+    engine.setSandPreHfBellBoostDial (load (sandPreHfBellBoost));
+    engine.setSandPreHfBellBandwidthDial (load (sandPreHfBellBandwidth));
+    engine.setSandPreHfShelfFreqHz (choiceToValue (sandPreHfShelfFreq, msrr::sandHfShelfFreqHz));
+    engine.setSandPreHfShelfAttenDial (load (sandPreHfShelfAtten));
+
+    engine.setSandPeakReductionProportion (load (sandPeakRed) * 0.01f);
+    engine.setSandLimitEnabled (loadBool (sandLimit));
+    engine.setSandEmphasisProportion (load (sandEmphasis) * 0.01f);
+    engine.setSandResidualEnabled (loadBool (sandResidual));
+
+    engine.setSandPostLfFreqHz (choiceToValue (sandPostLfFreq, msrr::sandLfFreqHz));
+    engine.setSandPostLfBoostDial (load (sandPostLfBoost));
+    engine.setSandPostLfCutDial (load (sandPostLfCut));
+    engine.setSandPostHfBellFreqHz (choiceToValue (sandPostHfBellFreq, msrr::sandHfBellFreqHz));
+    engine.setSandPostHfBellBoostDial (load (sandPostHfBellBoost));
+    engine.setSandPostHfBellBandwidthDial (load (sandPostHfBellBandwidth));
+    engine.setSandPostHfShelfFreqHz (choiceToValue (sandPostHfShelfFreq, msrr::sandHfShelfFreqHz));
+    engine.setSandPostHfShelfAttenDial (load (sandPostHfShelfAtten));
+
+    engine.setSpreadDetuneCents (load (spreadDetune));
+    engine.setSpreadTimeScale (load (spreadTime));
+    engine.setSpreadWidth (load (spreadWidth) * 0.01f);
+
+    engine.setSlapDelayMs (load (slapTime));
+    engine.setSlapStereoEnabled (loadBool (slapStereo));
+    engine.setSlapToneProportion (load (slapTone) * 0.01f);
 
     for (int bus = 0; bus < MiserereEngine::numBusses; ++bus)
     {
         engine.setBusLevelDb (bus, load (busLevelDb[static_cast<size_t> (bus)]));
         engine.setBusMute (bus, loadBool (busMuteFlag[static_cast<size_t> (bus)]));
-        engine.setBusSolo (bus, loadBool (busSoloFlag[static_cast<size_t> (bus)]));
+        engine.setBusAudition (bus, loadBool (busAuditionFlag[static_cast<size_t> (bus)]));
     }
 }
 
@@ -270,10 +348,10 @@ void MiserereAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 
     preparedBlockSize = samplesPerBlock;
 
-    // Nothing in any bus adds reported host latency: Busses A-C are
-    // minimum-phase/causal by the suite's phase discipline, and Bus D's
-    // delay is the effect itself, not a compensation delay (see
-    // docs/adr/0003-parallel-bus-topology.md).
+    // Nothing in any bus adds reported host latency: busses (1)/(2) are
+    // minimum-phase/causal by the suite's phase discipline, and busses
+    // (3)/(4)'s delays are the effects themselves, not compensation delays
+    // (see docs/adr/0003).
     setLatencySamples (engine.getLatencySamples());
 }
 
@@ -327,8 +405,8 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     // Oversized-block guard (a REAL clamp, not a jassert): hosts are
     // expected never to exceed the block size promised to prepareToPlay(),
     // but if one does, the buffer is processed in chunks of at most
-    // preparedBlockSize so the engine's prepare()-sized bus buffers are
-    // never indexed out of bounds - and no audio is dropped.
+    // preparedBlockSize so the engine's prepare()-sized buffers are never
+    // indexed out of bounds - and no audio is dropped.
     const auto chunkLimit = preparedBlockSize > 0
                                  ? static_cast<size_t> (preparedBlockSize)
                                  : juce::jmax (static_cast<size_t> (1), fullBlock.getNumSamples());
@@ -368,6 +446,12 @@ void MiserereAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void MiserereAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    // Tolerant import: a v1 (or any unrecognised) session's XML simply has
+    // its unknown parameter IDs ignored by ValueTree::fromXml/APVTS's
+    // internal restore - no explicit migration is attempted (pre-1.0
+    // breaking parameter changes are acceptable per docs/design-brief.md's
+    // "Versioning" section). The only requirement is "no crash" - see
+    // tests/StateTests.cpp's v1-import test.
     const std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
 
     if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))

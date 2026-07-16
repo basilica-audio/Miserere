@@ -3,10 +3,10 @@
 Per-repo working memory for Claude Code sessions on this plugin. Part of the **Basilica Audio** plugin suite — sacred-architecture DSP for heavy music (`github.com/basilica-audio`).
 
 ## What this is
-Miserere is a parallel vocal chain in a single unit — a direct chain plus three parallel busses (opto sandwich, FET smash, slap delay), each with its own fader, inspired by classic parallel mixing workflows (the "rough vocal template" popularized by mixers like Andrew Scheps). Nothing on the market packages this parallel-bus topology as one plugin: existing channel strips (e.g. Waves Scheps Omni Channel) are serial with per-module wet/dry. AU / VST3 / Standalone, JUCE 8.
+Miserere is the parallel vocal template in a single unit — a bit-transparent-by-default direct path plus four parallel return busses (Crush, Sandwich, Spread, Slap), each with its own return fader, Mute and exclusive Audition, inspired by the documented 2010–2023-era parallel mixing workflow popularized in public interviews by mixers such as Andrew Scheps. Nothing on the market packages this true-parallel-bus topology as one plugin: existing channel strips (e.g. Waves Scheps Omni Channel) are serial with per-module wet/dry. AU / VST3 / Standalone, JUCE 8.
 
-## Status (M0 — bootstrap)
-Skeleton scaffolded; M1 DSP implementation in progress. See `docs/design-brief.md` for the binding M1 specification (topology, parameters, tests).
+## Status (v0.2.0 — v2 topology rewrite)
+v2 replaced v1's topology entirely: v1 processed the "direct bus" by default and treated it as one of four equal faded busses; v2 makes the direct path a bit-transparent "channel" that always sums at unity and feeds all four return busses (unity taps), with every optional direct-path section off by default. See `docs/design-brief.md` for the binding v2 specification (topology, parameters, tests) and `docs/research-notes.md` for the sourced findings the voicing is derived from.
 
 ## Design principles (Yves, binding)
 - **No brand names anywhere** — modules use generic hardware descriptors only: "Passive Tube EQ", "Opto Leveler", "FET Limiter", "British Console EQ". Visual design may quote the originals' material language (M3) but never copies a faceplate 1:1 (trade-dress risk).
@@ -26,7 +26,7 @@ Release/universal + pluginval + auval run in CI, not locally.
 - **Real-time safety:** no alloc/lock/file-IO/logging on the audio thread; allocate in `prepareToPlay`; `reset()` clears ALL state (suite review finding: missing resets ship real bugs); `ScopedNoDenormals`; smoothed params.
 - **Filter coefficients on the audio thread:** use `juce::dsp::IIR::ArrayCoefficients` (stack, no heap) — `Coefficients::make*` allocates and is a known suite-wide review finding.
 - **Guard oversized blocks in Release builds** (real clamp, not only `jassert` — asserts compile out).
-- **Parallel-bus phase discipline:** all busses except Slap must stay sample-aligned with the Direct bus (minimum-phase IIR only, no lookahead in M1) so parallel summing never combs.
+- **Parallel-bus phase discipline:** busses ① Crush and ② Sandwich must stay sample-aligned with the Direct path (minimum-phase IIR only, no lookahead) so parallel summing never combs; busses ③ Spread and ④ Slap are delays by design and exempt (see ADR 0003).
 - **DryWetMixer gotcha (JUCE 8.0.14):** prime `setWetMixProportion(mix)` before `reset()` in `prepare()`.
 - **ComboBox parameters (JUCE 8.0.14):** `ComboBoxAttachment` does NOT populate items — call `addItemList(param->getAllValueStrings(), 1)` BEFORE attaching (shipped as an apotheosis v0.1.0 bug).
 - **`main` is protected** — no direct commits; feature branch + PR, green CI required (Conventional Commits). New DSP needs tests (null/reference, NaN/Inf sweep, state round-trip, latency).

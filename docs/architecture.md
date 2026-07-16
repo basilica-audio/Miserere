@@ -1,90 +1,174 @@
-# Architecture
+# Architecture (v2)
 
 ## Signal flow
 
 ```mermaid
 flowchart LR
     IN[Input] --> TRIM_IN[In Trim]
-    TRIM_IN --> A_HPF[HPF] --> A_EQ[Console EQ] --> A_COMP[FET Comp] --> A_DS[De-Esser] --> A_SAT[Tape Sat] --> A_FADER[Fader A]
-    TRIM_IN --> B_EQ[Passive EQ in] --> B_OPTO[Opto Leveler] --> B_AIR[Passive Air out] --> B_FADER[Fader B]
-    TRIM_IN --> C_FET[FET Limiter<br/>all-buttons, mid-forward SC] --> C_FADER[Fader C]
-    TRIM_IN --> D_SLAP[Slap Delay<br/>filtered tape-soft feedback] --> D_FADER[Fader D]
-    A_FADER --> SUM((Σ))
-    B_FADER --> SUM
-    C_FADER --> SUM
-    D_FADER --> SUM
+    TRIM_IN --> DP_DSP[De-Ess Pre] --> DP_FET[FET Comp light] --> DP_EQ[Console EQ] --> DP_SAT[Sat] --> DP_DSPOST[De-Ess Post]
+    DP_DSPOST --> DIRECT_SUM((direct, unity))
+    DP_DSPOST --> CRUSH[① Crush: FET limiter] --> CRUSH_FADER[Crush Fader]
+    DP_DSPOST --> SAND_PRE[Passive EQ] --> SAND_OPTO[Opto Leveler] --> SAND_POST[Passive EQ] --> SAND_FADER[Sandwich Fader]
+    DP_DSPOST --> SPREAD[③ Spread: dual micro-pitch] --> SPREAD_FADER[Spread Fader]
+    DP_DSPOST --> SLAP[④ Slap: single-repeat delay] --> SLAP_FADER[Slap Fader]
+    DIRECT_SUM --> SUM((Σ))
+    CRUSH_FADER --> PARALLEL_TRIM[Parallel Trim] --> SUM
+    SAND_FADER --> PARALLEL_TRIM
+    SPREAD_FADER --> PARALLEL_TRIM
+    SLAP_FADER --> PARALLEL_TRIM
     SUM --> TRIM_OUT[Out Trim] --> OUT[Output]
 ```
 
-The whole path is owned by `MiserereEngine` (`src/dsp/MiserereEngine.{h,cpp}`), independent of `juce::AudioProcessor` so it is directly unit-testable. The engine fans the trimmed input out into four pre-allocated bus buffers, processes each bus, resolves mute/solo into per-bus route gains, and sums the busses back into the host's buffer through per-sample-smoothed fader gains.
+The whole path is owned by `MiserereEngine` (`src/dsp/MiserereEngine.{h,cpp}`), independent
+of `juce::AudioProcessor` so it is directly unit-testable. The engine processes the direct
+path once, fans that single processed copy out into four pre-allocated bus buffers (unity
+taps — the "post-fader unity send" the technique is built on), processes each bus, resolves
+Mute/Audition into per-bus route gains, and sums the direct path plus busses back into the
+host's buffer through per-sample-smoothed fader gains (each bus's fader additionally scaled
+by the Parallel macro trim).
 
-## Phase discipline of the parallel busses (the central invariant)
+This is a **topology rewrite of v0.1.0** (see the design brief's "Why v1 was wrong" and
+[ADR 0003](adr/0003-parallel-bus-topology.md), whose sample-alignment invariant carries
+forward unchanged): v1 treated all four busses (including "Direct") as equal, independently
+faded parallel chains, with the direct bus processed by default. v2 corrects the two errors
+this produced: the direct/dry path is not one bus among four, it is the "channel" that always
+sums at unity and feeds every send; and it is bit-transparent by default (every optional
+section starts OFF), because the technique's entire premise is that the dry vocal's envelope
+must survive underneath everything else that gets added.
 
-Summing several processed copies of the same signal is an interference experiment: any inter-bus time or phase offset turns the sum into a comb filter. Miserere's design rule, tested by the M1 guarantee suite (`tests/NullAndAlignmentTests.cpp`):
+## Phase discipline of the parallel busses (the central invariant, carried over from v1)
 
-- **Busses A–C are sample-aligned, always.** Every module on them is either a pure gain computation (compressors, de-esser gain leg, saturator) or a minimum-phase IIR filter with no lookahead, no oversampling, no FIR linear-phase stages, and no internal delay. A sample enters and leaves each bus at the same index.
-- **Bus D is exempt by design** — it *is* a delay, and it outputs the wet echo only. See [ADR 0003](adr/0003-parallel-bus-topology.md).
-- **Reported latency is always 0** (`tests/LatencyTests.cpp`): nothing on any bus is a compensation delay.
+- **Busses ① Crush and ② Sandwich are sample-aligned, always.** Every module on them is
+  either a pure per-sample gain computation (limiters, the leveler's gain multiply) or a
+  minimum-phase IIR filter with no lookahead, no oversampling, no FIR linear-phase stages,
+  and no internal delay.
+- **Busses ③ Spread and ④ Slap are exempt by design** — they *are* delays, and Spread's
+  micro-pitch shifting is itself built from modulated delay lines. See
+  [ADR 0003](adr/0003-parallel-bus-topology.md).
+- **Reported latency is always 0** (`tests/LatencyTests.cpp`): nothing on any bus is a
+  compensation delay - Spread/Slap's delays are the musical effect itself.
 
-Minimum-phase IIR filters do have their own frequency-dependent phase response — but since every bus that filters does so minimum-phase and the busses carry *different* processing intentionally, this is the same "two mics on one source" reality of any parallel mixing workflow. What the discipline rules out is *structural* misalignment: bulk sample offsets from lookahead/FIR/oversampling that would comb even a flat-settings sum. The impulse-alignment test proves the strongest version of this: with all modules neutral, A+B+C sum an impulse to a single sample with nothing else above −100 dBFS.
+`tests/NullAndAlignmentTests.cpp` proves the strongest version of this at neutral EQ
+settings: Direct + Crush + Sandwich sum an impulse to a single aligned sample with nothing
+else above −100 dBFS.
 
 ## Module map
 
 | Directory | Responsibility |
 |---|---|
-| `src/dsp` | All audio-thread DSP, one class per module: `Hpf`, `ConsoleEq`, `FetCompressor` (serves Bus A *and*, with its character features enabled, Bus C), `DeEsser`, `TapeSat` (+ the shared `TapeSaturator` curve), `PassiveEq` (Bus B in-EQ and air-out as two instances of one class), `OptoLeveler`, `SlapDelay`, and `MiserereEngine` wiring them into the four-bus topology. `RealtimeCoefficients.h` holds the shared allocation-free IIR coefficient-update helpers. |
-| `src/params` | `ParameterIds.h` (frozen ID contract) and `ParameterLayout.cpp` (APVTS layout: ranges, defaults, choice lists). The choice-index→value tables (`compRatioValues`, `busB*FreqHz`) live here too, so the layout strings and the DSP mapping can never drift apart. |
-| `src/PluginProcessor.*` | Host plumbing: APVTS wiring, `prepareToPlay`/`processBlock`/`reset`, oversized-block chunking, latency reporting (always 0), state save/load, solo-exclusivity parameter listener. No DSP of its own. |
-| `src/PluginEditor.*` | Functional v0.1 editor: data-driven rows of rotary sliders / combo boxes / toggles per bus, bound via APVTS attachments. Custom GUI is M3. |
+| `src/dsp` | One class per module. `DeEsser`, `TapeSat` (+ shared `TapeSaturator` curve) are unchanged from v1, instantiated twice/once respectively on the Direct path. `FetCompressor` is the Direct path's simple threshold-based "FET Comp light" (insert voicing only - no drive/ALL-mode character). `FetCrush` is the new, separate input-drive/per-ratio-table/dual-rate-release/ALL-mode-plateau module for bus ① Crush. `ConsoleEq` is the Direct path's 1073-class grid, with the HPF folded in as a 3-pole (1st + 2nd order) cascade (the standalone v1 `Hpf` class is retired). `OptoLeveler` and `PassiveEq` (shared, two instances) implement bus ② Sandwich. `SpreadPitch` (new) and `SlapDelay` (rewritten for v2's single-repeat, feedback-fixed-at-0 design) implement busses ③/④. `MiserereEngine` wires everything into the v2 topology. `RealtimeCoefficients.h` holds the shared allocation-free IIR coefficient-update helpers, unchanged. |
+| `src/params` | `ParameterIds.h` (frozen-as-of-v0.2.0 ID contract - the v1 IDs are gone, a deliberate breaking change pre-1.0) and `ParameterLayout.cpp` (APVTS layout: ranges, defaults, choice lists). Choice-index→value tables live here too, so the layout strings and the DSP mapping can never drift apart. |
+| `src/PluginProcessor.*` | Host plumbing: APVTS wiring, `prepareToPlay`/`processBlock`/`reset`, oversized-block chunking, latency reporting (always 0), state save/load (tolerant of a v1 session's now-unknown IDs), Audition-exclusivity parameter listener. No DSP of its own. |
+| `src/PluginEditor.*` | The same data-driven functional editor as v1 (unchanged architecture), rebuilt against the v2 parameter set. Custom GUI is M3. |
 
-Dependency direction is one-way: `PluginEditor` → `params`, `PluginProcessor` → `params` + `dsp`; `src/dsp` never depends upward.
+Dependency direction is one-way: `PluginEditor` → `params`, `PluginProcessor` → `params` +
+`dsp`; `src/dsp` never depends upward.
 
 ## Design decisions
 
 ### Real-time-safe IIR coefficient updates
 
-All tunable filters recompute coefficients once per block from smoothed parameter values via `juce::dsp::IIR::ArrayCoefficients` (stack arrays, zero allocation), written in place into pre-allocated `Coefficients` objects by `msrr::applyBiquadCoefficients()`. `Coefficients::make*` (which heap-allocates) appears nowhere on the audio thread.
+Unchanged from v1: all tunable filters recompute coefficients once per block from smoothed
+parameter values via `juce::dsp::IIR::ArrayCoefficients` (stack arrays, zero allocation),
+written in place into pre-allocated `Coefficients` objects by
+`msrr::applyBiquadCoefficients()`/`applyFirstOrderCoefficients()`. Neutral EQ bands are
+skipped structurally (a small dead zone around 0 dB) for the same fp-contract +
+APVTS-denormalisation reasons documented in the v1 architecture notes (preserved in the
+module headers).
 
-Two subtleties in the helper and its callers, both load-bearing for the null guarantee:
+### Two FET modules, not one with extra flags
 
-1. **Normalisation divides by a0** rather than multiplying by its reciprocal: for a 0 dB RBJ shelf/peak the raw b and a coefficients are identical term-by-term, and `b/a0 == a/a0` bit-exactly only under division.
-2. **Neutral EQ bands are skipped structurally** (a ±0.001 dB dead zone), for two reasons measured during M1: clang's default fp-contraction fuses the biquad's `(input*b1) - (output*a1)` into an fma whose 1-ulp residual recirculates through the feedback path (surfacing around −96 dB on low-frequency bands even with perfectly symmetric coefficients), and an APVTS "0 dB" that round-trips through normalise/snap comes back as ~−4·10⁻⁷ dB, so an exact-zero comparison never fires in a real host. The dead zone makes "EQ flat ⇒ bit-transparent" compiler- and host-independent.
+v1 shared a single `FetCompressor` class between the Direct bus (threshold-based) and the
+Smash bus (drive-based, all-buttons). v2 splits these into two classes because their control
+paradigms genuinely don't share a parameter surface: `FetCompressor` is threshold-driven
+insert voicing with no drive/ratio-table concept; `FetCrush` has no threshold knob at all, a
+fixed per-ratio threshold/knee table, inverted-taper ballistics, a dual-rate
+program-dependent release governed by a compression-duration integrator, and an ALL-mode
+plateau (a steep ratio just above the knee giving back to a softer ratio past a fixed
+overshoot "kink", plus a short extra attack lag exclusive to that mode - see `FetCrush.h`).
 
-### One FET class, two characters
+### Opto: raw-audio detector, three-path release
 
-The brief's Bus A "FET Comp" and Bus C "FET Limiter (all-buttons)" share one implementation (`FetCompressor`) with the character features off by default: a mid-forward sidechain (fixed +6 dB peak at 2 kHz applied to the *detector copy only* — the audio path is never filtered, preserving alignment), program-dependent release shortening (effective release ∝ 1/(1 + 0.12·GRdB), recomputed at block rate from the previous block's GR), input drive and output trim. Bus C runs at a fixed 20:1 / −20 dBFS voicing with Drive as the user's intensity control — matching how an all-buttons unit is actually driven.
+`OptoLeveler` was rewritten to remove any separate sidechain-smoothing detector stage ahead
+of the ballistics (per the sourced "rectification and filtering... are not necessary"
+finding) and to model the two-stage release as three parallel one-pole "cell conductance"
+followers (fast/mid/slow release time constants, mid/slow scaled by a light-history
+accumulator) combined via `max()` - the fast path dominates immediately after a short GR
+event and decays out of the way, leaving the slower path(s) to carry a much longer tail after
+sustained GR, which reproduces the documented "60 ms for 50%, then up to 15 s for the rest"
+shape without an explicit two-branch switch. The static curve is an explicit lookup
+(`OptoLeveler::staticCurveOutputDb`), not a fixed ratio.
 
-The detector is a fast-attack/slow-release one-pole on the squared signal, i.e. effectively peak-reading — the static-curve tests model it as such.
+### Passive EQ: resonant-shelf boost + peaking-dip cut, not two literal shelves
 
-### Opto two-stage release
+The documented "simultaneous boost+cut doesn't cancel" hardware behaviour does not fall out
+of two independent digital low-shelf filters at the same corner (both reach full effect at
+DC regardless of corner placement, so with cut's magnitude calibrated larger than boost's,
+DC nets negative regardless of layout). `PassiveEq` instead models boost as a resonant low
+shelf whose corner sits at the LF selector frequency (Q > 0.707, so it peaks at its own
+corner) and cut as a broader, non-resonant peaking dip centred well above it (6× the
+selector) - chosen and verified numerically during implementation to reproduce the
+qualitative "bump below/at corner, dip in the low-mids" shape with comfortable margins. See
+`docs/research-notes.md`'s Passive EQ section for the full reasoning and the caveat that this
+is a deliberate simplification, not a literal passive-network simulation.
 
-`OptoLeveler` separates *level detection* (a symmetric ~5 ms one-pole, RMS-like) from *gain ballistics* (fixed 10 ms attack, variable release in the dB domain) and adds a third state: a light-history accumulator (~1.5 s time constant) integrating recent gain reduction. The release time interpolates from the ~60 ms fast stage to the ~600 ms slow stage as history accumulates — brief GR recovers fast, sustained GR releases lazily, which is the photocell-memory behaviour the brief specifies and `tests/OptoLevelerTests.cpp` measures directly (long-history release ≥ 2× slower).
+### Spread: delay-line Doppler pitch shifting
 
-### Slap loop stability
+`SpreadPitch` implements the classic "modulated delay, glide/crossfade" pitch-shift
+technique: each voice is a single delay line read by two crossfading taps whose read
+position glides at a rate proportional to the desired pitch ratio (read speed != write speed
+= a pitch shift), each tap wrapping and resetting to the opposite phase inside a
+raised-cosine crossfade window before it runs out of buffer. Two voices (~30 ms base, pitched
+up; ~50 ms base, pitched down) are hard-panned L/R by default, blended toward centre by the
+Width control.
 
-Bus D's feedback path is `HP → LP → tanh soft saturation → ×feedback (≤ 0.3)`. The saturator is strictly bounded and approximately unity-gain at small signal (nominal-level-compensated, see `TapeSaturator.h`), so the loop's round-trip gain is ≤ ~0.3 plus filter losses — geometric decay, unconditionally stable, verified by 10 s of full-scale noise at maximum feedback. Delay-time changes ride a deliberately slow (100 ms) smoother, giving a mild tape-style pitch slur instead of zipper artefacts; the delay line is allocated once in `prepare()` at full 180 ms capacity and cleared by `reset()` (the M1 reset guarantee explicitly covers it).
+### Slap: darkness baked into the single repeat, not a feedback loop
+
+v2 fixes feedback at 0 (dropped as a parameter entirely) per the sourced finding that the
+documented technique uses a single repeat whose darkness comes from the delay unit's own
+character, not filtering/feedback. This is a structural change from v1's design: since there
+is no feedback loop to voice progressively, the lowpass darkening and soft saturation are
+applied once, directly to the one repeat.
 
 ### Neutral settings are structural bypasses
 
-Every module the null test declares "neutral" bypasses *structurally* (early return, block untouched) rather than numerically: HPF and De-Esser via their enable toggles, Tape Sat at 0 dB drive, Opto at 0% peak reduction, EQ bands inside the dead zone. The FET comp's identity at threshold 0 dB is arithmetic but exact (clamped-to-zero overshoot ⇒ gain factor exactly 1.0f). This is what makes the −120 dBFS null bar reachable with float processing.
+Every direct-path section defaults OFF and bypasses *structurally* (early return, block
+untouched) rather than numerically: the two De-Essers and the Console EQ's HPF via enable
+toggles, Sat and Console EQ's Drive at 0 dB, Console EQ's shelf/bell bands inside the dead
+zone, FET Comp simply never called while its enable flag is off. This is what makes the
+default-wire null test's −120 dBFS bar reachable with float processing - see
+`tests/NullAndAlignmentTests.cpp` for the note on how that test's scope was interpreted
+against the brief's non-floor default bus levels.
 
-### Mute/Solo semantics and solo exclusivity
+### Mute/Audition semantics and exclusivity
 
-The engine resolves mute/solo at the summing stage into 0/1 route gains (console semantics: mute always wins; any solo isolates the soloed, unmuted busses), while every bus's DSP keeps running so envelopes/filters/delay stay continuous and unmuting never pops. Solo *exclusivity* (engaging one solo releases the others — the brief's "exclusive-OR") is parameter-level behaviour, enforced in `PluginProcessor` by an APVTS listener with a reentrancy guard. Known limitation: if a host automates two solos on within the same gesture, the listener resolves them in callback order; the engine remains well-defined for any flag combination regardless.
+The engine resolves Mute/Audition at the summing stage: Mute always wins; if ANY bus is
+auditioned, ONLY the auditioned (unmuted) bus(ses) reach the output, and the direct path
+itself is excluded too (Audition isolates exactly what it names - the same signal-flow rule
+as v1's Solo, renamed per the brief's framing that this technique should never be judged in
+solo except for this explicit diagnostic purpose). Audition *exclusivity* is parameter-level
+behaviour enforced in `PluginProcessor` via an APVTS listener with a reentrancy guard, same
+pattern as v1's solo-exclusivity listener.
 
-### Oversized-block guard
+### Oversized-block guard, NaN/Inf policy
 
-`processBlock` chunks any buffer larger than the `prepareToPlay` promise into engine-sized pieces — a real Release-safe clamp (asserts compile out), which still processes all audio rather than truncating. The engine additionally trims defensively against its own buffer capacity as a last resort. `tests/RobustnessTests.cpp` proves both the safety and the fact that the null property survives chunking.
-
-### NaN/Inf policy
-
-The engine's summing stage sanitises non-finite samples to 0, guaranteeing finite *output* even under hostile input; `reset()` clears every module's state (filters, envelopes, opto history, the slap delay line) so processing *recovers* after poisoning — the two halves of the M1 guarantee, tested with both NaN and Inf sweeps.
+Unchanged from v1: `processBlock` chunks any buffer larger than the `prepareToPlay` promise
+into engine-sized pieces (a real Release-safe clamp); the engine's summing stage sanitises
+non-finite samples to 0; `reset()` clears every module's state (filters, envelopes, opto
+memory, and now three delay lines - Slap's plus Spread's two micro-pitch voices).
 
 ## Latency
 
-`MiserereEngine::getLatencySamples()` is a compile-time 0 and `PluginProcessor` reports it unconditionally: busses A–C are minimum-phase/causal with no lookahead, and Bus D's delay is the musical effect itself, not a compensation artefact.
+`MiserereEngine::getLatencySamples()` is a compile-time 0 and `PluginProcessor` reports it
+unconditionally: busses ①/② are minimum-phase/causal with no lookahead, and busses ③/④'s
+delays are the musical effect itself, not compensation artefacts.
 
 ## Deviations from the design brief
 
-- The brief's Bus A FET Comp bullet does not list a threshold parameter, but the M1 null-test guarantee explicitly exercises one ("comp threshold at max") — `busA_compThreshold` (−40…0 dB) exists accordingly.
-- Bus C's threshold is fixed at −20 dBFS (not a parameter): the all-buttons character is driven via input Drive, per the brief's parameter list for that bus.
+- The Passive EQ's non-cancelling LF boost+cut curve is a deliberate simplification of the
+  documented passive-network interaction (resonant shelf + peaking dip, not two literal
+  shelves) - see the design decision above and `docs/research-notes.md`.
+- `sand_peakred` is implemented as an input-drive parameter into the fixed static curve
+  (matching the hardware's Peak Reduction knob being itself an input gain into the cell),
+  rather than a threshold shift - consistent with the brief's own framing of the module as
+  drive-driven, not threshold-driven.

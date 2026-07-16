@@ -1,32 +1,63 @@
 #include "OptoLeveler.h"
 
+float OptoLeveler::staticCurveOutputDb (float levelDb, bool limitEnabled) noexcept
+{
+    if (levelDb <= breakawayDb)
+        return levelDb;
+
+    const auto kneeRatio = limitEnabled ? limitKneeRatio : normalKneeRatio;
+    const auto kneeCeilingDb = breakawayDb + kneeRegionDb;
+
+    if (levelDb <= kneeCeilingDb)
+        return breakawayDb + (levelDb - breakawayDb) / kneeRatio;
+
+    const auto outputAtCeiling = breakawayDb + kneeRegionDb / kneeRatio;
+    return outputAtCeiling + (levelDb - kneeCeilingDb) / ceilingRatio;
+}
+
 void OptoLeveler::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate > 0.0 ? spec.sampleRate : 44100.0;
 
     const auto numChannels = static_cast<size_t> (spec.numChannels);
-    detectorState.assign (numChannels, 0.0f);
-    grSmoothedDb.assign (numChannels, 0.0f);
-    historyState.assign (numChannels, 0.0f);
+    fastPathState.assign (numChannels, 0.0f);
+    midPathState.assign (numChannels, 0.0f);
+    slowPathState.assign (numChannels, 0.0f);
 
-    amountSmoothed.reset (sampleRate, smoothingTimeSeconds);
-    amountSmoothed.setCurrentAndTargetValue (lastAmount01);
+    emphasisFilters.clear();
+    emphasisFilters.resize (numChannels); // Filter<float> is move-only, so resize() rather than assign()
+
+    for (auto& filter : emphasisFilters)
+        filter.coefficients = emphasisCoefficients;
+
+    driveSmoothed.reset (sampleRate, driveSmoothingTimeSeconds);
+    driveSmoothed.setCurrentAndTargetValue (lastAmount01);
+
+    postAttenuatorCompensation = TapeSaturator::compensationForDrive (postAttenuatorDriveLinear);
 
     reset();
+
+    msrr::applyBiquadCoefficients (*emphasisCoefficients,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (
+            sampleRate, emphasisFreqHz, emphasisShelfQ, juce::Decibels::decibelsToGain (-emphasisAmount * emphasisMaxCutDb)));
 }
 
 void OptoLeveler::reset()
 {
-    std::fill (detectorState.begin(), detectorState.end(), 0.0f);
-    std::fill (grSmoothedDb.begin(), grSmoothedDb.end(), 0.0f);
-    std::fill (historyState.begin(), historyState.end(), 0.0f);
+    std::fill (fastPathState.begin(), fastPathState.end(), 0.0f);
+    std::fill (midPathState.begin(), midPathState.end(), 0.0f);
+    std::fill (slowPathState.begin(), slowPathState.end(), 0.0f);
+
+    for (auto& filter : emphasisFilters)
+        filter.reset();
+
     currentGainReductionDb = 0.0f;
 }
 
 void OptoLeveler::setPeakReductionProportion (float newAmount01) noexcept
 {
-    lastAmount01 = newAmount01;
-    amountSmoothed.setTargetValue (newAmount01);
+    lastAmount01 = juce::jlimit (0.0f, 1.0f, newAmount01);
+    driveSmoothed.setTargetValue (lastAmount01);
 }
 
 void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
@@ -37,68 +68,94 @@ void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
     if (numSamples == 0 || numChannels == 0)
         return;
 
-    const auto amount01 = juce::jlimit (0.0f, 1.0f, amountSmoothed.skip (static_cast<int> (numSamples)));
+    // Peak Reduction is an input drive into the fixed static curve (0-18 dB
+    // at 100%), not a threshold - see class comment.
+    constexpr float maxDriveDb = 18.0f;
+    const auto driveDb = juce::jlimit (0.0f, 1.0f, driveSmoothed.skip (static_cast<int> (numSamples))) * maxDriveDb;
+    const auto driveGainLinear = juce::Decibels::decibelsToGain (driveDb);
 
-    // Bit-exact bypass at Peak Reduction == 0: skip the whole gain path
-    // (detector/history state still advances below so engaging reduction
-    // mid-stream starts from a settled, continuous state).
-    const bool bypassed = amount01 <= 0.0f;
+    msrr::applyBiquadCoefficients (*emphasisCoefficients,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (
+            sampleRate, emphasisFreqHz, emphasisShelfQ, juce::Decibels::decibelsToGain (-emphasisAmount * emphasisMaxCutDb)));
 
-    const auto thresholdDb = juce::jmap (amount01, 0.0f, 1.0f, 0.0f, thresholdMinDb);
-    const auto ratio = juce::jmap (amount01, 0.0f, 1.0f, 1.0f, maxRatio);
-    const auto ratioFactor = 1.0f - (1.0f / ratio);
+    // Each path's own fixed attack/release coefficients - see class
+    // comment (the mid/slow paths' slow attack, not a history accumulator,
+    // is what makes their contribution genuinely depend on how long the
+    // signal has been loud).
+    const auto fastAttackCoeff = std::exp (-1.0 / (fastAttackSeconds * sampleRate));
+    const auto fastReleaseCoeff = std::exp (-1.0 / (fastReleaseSeconds * sampleRate));
+    const auto midAttackCoeff = std::exp (-1.0 / (midAttackSeconds * sampleRate));
+    const auto midReleaseCoeff = std::exp (-1.0 / (midReleaseSeconds * sampleRate));
+    const auto slowAttackCoeff = std::exp (-1.0 / (slowAttackSeconds * sampleRate));
+    const auto slowReleaseCoeff = std::exp (-1.0 / (slowReleaseSeconds * sampleRate));
 
-    const auto detectorCoeff = std::exp (-1.0 / (detectorTimeSeconds * sampleRate));
-    const auto attackCoeff = std::exp (-1.0 / (attackTimeSeconds * sampleRate));
-    const auto historyCoeff = std::exp (-1.0 / (historyTimeSeconds * sampleRate));
+    const auto numChannelsToProcess = juce::jmin (numChannels, fastPathState.size());
 
     float peakGainReductionDb = 0.0f;
 
-    for (size_t channel = 0; channel < numChannels && channel < detectorState.size(); ++channel)
+    for (size_t sample = 0; sample < numSamples; ++sample)
     {
-        auto* data = block.getChannelPointer (channel);
-        auto& detector = detectorState[channel];
-        auto& grDb = grSmoothedDb[channel];
-        auto& history = historyState[channel];
+        // Linked detection: both channels' filters/envelopes are fed the
+        // signed sample of whichever channel currently has the larger
+        // magnitude, so a hard-panned burst produces identical gain
+        // reduction on both channels (guarantee 10). Unlinked (default):
+        // each channel is fed its own sample.
+        float sharedDrivenSample = 0.0f;
 
-        // Two-stage program-dependent release: interpolate the release time
-        // constant from the fast (~60 ms) to the slow (~600 ms) stage based
-        // on the channel's light-history at the start of this block, and
-        // derive the one-pole coefficient once per block (an exp() per
-        // sample would be needlessly expensive; the history moves on a
-        // ~1.5 s time scale, far slower than any block).
-        const auto historyNow = juce::jlimit (0.0f, 1.0f, history);
-        const auto releaseSeconds = fastReleaseSeconds + static_cast<double> (historyNow) * (slowReleaseSeconds - fastReleaseSeconds);
-        const auto releaseCoeff = std::exp (-1.0 / (releaseSeconds * sampleRate));
-
-        for (size_t sample = 0; sample < numSamples; ++sample)
+        if (linked)
         {
-            const auto inputSample = data[sample];
+            auto largestAbs = -1.0f;
 
-            // Level detector (RMS-ish squared one-pole).
-            const auto rectified = inputSample * inputSample;
-            detector = static_cast<float> (detectorCoeff * detector + (1.0 - detectorCoeff) * rectified);
+            for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+            {
+                const auto driven = block.getChannelPointer (channel)[sample] * driveGainLinear;
 
-            const auto levelDb = juce::Decibels::gainToDecibels (std::sqrt (juce::jmax (detector, 1.0e-12f)), -120.0f);
-            const auto targetGrDb = juce::jmax (0.0f, levelDb - thresholdDb) * ratioFactor;
+                if (std::abs (driven) > largestAbs)
+                {
+                    largestAbs = std::abs (driven);
+                    sharedDrivenSample = driven;
+                }
+            }
+        }
 
-            // Gain-domain ballistics: fixed attack, history-dependent release.
-            const auto coeff = targetGrDb > grDb ? attackCoeff : releaseCoeff;
-            grDb = static_cast<float> (coeff * grDb + (1.0 - coeff) * targetGrDb);
+        for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+        {
+            auto* data = block.getChannelPointer (channel);
+            auto& fastPath = fastPathState[channel];
+            auto& midPath = midPathState[channel];
+            auto& slowPath = slowPathState[channel];
+            auto& filter = emphasisFilters[channel];
 
-            // Light-history: integrates applied GR toward [0, 1]; saturates
-            // at historyFullScaleGrDb of sustained reduction.
-            const auto historyTarget = juce::jlimit (0.0f, 1.0f, grDb / historyFullScaleGrDb);
-            history = static_cast<float> (historyCoeff * history + (1.0 - historyCoeff) * historyTarget);
+            const auto drivenSample = data[sample] * driveGainLinear;
+            const auto detectorInput = linked ? sharedDrivenSample : drivenSample;
+            const auto emphasised = filter.processSample (detectorInput);
+            const auto rectified = emphasised * emphasised;
 
-            if (bypassed)
-                continue;
+            fastPath = static_cast<float> ((rectified > fastPath ? fastAttackCoeff : fastReleaseCoeff) * fastPath
+                                            + (1.0 - (rectified > fastPath ? fastAttackCoeff : fastReleaseCoeff)) * rectified);
+            midPath = static_cast<float> ((rectified > midPath ? midAttackCoeff : midReleaseCoeff) * midPath
+                                           + (1.0 - (rectified > midPath ? midAttackCoeff : midReleaseCoeff)) * rectified);
+            slowPath = static_cast<float> ((rectified > slowPath ? slowAttackCoeff : slowReleaseCoeff) * slowPath
+                                            + (1.0 - (rectified > slowPath ? slowAttackCoeff : slowReleaseCoeff)) * rectified);
 
-            const auto gainFactor = juce::Decibels::decibelsToGain (-grDb);
-            data[sample] = inputSample * gainFactor * makeupGainLinear;
-            peakGainReductionDb = juce::jmax (peakGainReductionDb, grDb);
+            // The two-stage (fast-then-slow), history-dependent release
+            // falls straight out of taking the max of three paths whose
+            // mid/slow attacks are themselves slow - see class comment.
+            const auto combined = juce::jmax (fastPath, juce::jmax (midPath, slowPath));
+            const auto levelDb = juce::Decibels::gainToDecibels (std::sqrt (juce::jmax (combined, 1.0e-12f)), -120.0f);
+            const auto outputDb = staticCurveOutputDb (levelDb, limitEnabled);
+            const auto reductionDb = juce::jmax (0.0f, levelDb - outputDb);
+
+            const auto gainFactor = juce::Decibels::decibelsToGain (-reductionDb);
+            const auto attenuated = drivenSample * gainFactor;
+
+            // Gentle, always-on, level-dependent tube/transformer-style
+            // colouration after the (clean) attenuator - see class comment.
+            data[sample] = TapeSaturator::processSample (attenuated, postAttenuatorDriveLinear, postAttenuatorCompensation);
+
+            peakGainReductionDb = juce::jmax (peakGainReductionDb, reductionDb);
         }
     }
 
-    currentGainReductionDb = bypassed ? 0.0f : peakGainReductionDb;
+    currentGainReductionDb = peakGainReductionDb;
 }

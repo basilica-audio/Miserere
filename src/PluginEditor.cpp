@@ -12,7 +12,7 @@ namespace
     constexpr int slotWidth = knobSize + margin / 2;
     constexpr int toggleWidth = 70;
     constexpr int rowHeight = headerHeight + labelHeight + knobSize + textBoxHeight + margin;
-    constexpr int editorWidth = margin * 2 + 12 * slotWidth; // widest row (Direct) has 12 control slots
+    constexpr int editorWidth = margin * 2 + 10 * slotWidth; // widest row has 10 control slots
 }
 
 MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcessor& processorToEdit)
@@ -23,65 +23,94 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     auto& global = addSection ("Global");
     addKnob (global, ParamIDs::inTrim, "In Trim");
     addKnob (global, ParamIDs::outTrim, "Out Trim");
+    addToggle (global, ParamIDs::link, "Link");
+    addKnob (global, ParamIDs::parallelTrim, "Parallel");
     addToggle (global, ParamIDs::bypass, "Bypass");
 
-    // Bus A - Direct chain, in signal-flow order.
-    auto& direct = addSection ("Bus A - Direct");
-    addToggle (direct, ParamIDs::busAHpfEnabled, "HPF");
-    addKnob (direct, ParamIDs::busAHpfFreq, "HPF Freq");
-    addKnob (direct, ParamIDs::busAEqLowGain, "EQ Low");
-    addKnob (direct, ParamIDs::busAEqMidFreq, "Mid Freq");
-    addKnob (direct, ParamIDs::busAEqMidGain, "Mid Gain");
-    addKnob (direct, ParamIDs::busAEqMidQ, "Mid Q");
-    addKnob (direct, ParamIDs::busAEqHighGain, "EQ High");
-    addChoice (direct, ParamIDs::busACompRatio, "Ratio");
-    addKnob (direct, ParamIDs::busACompThreshold, "Threshold");
-    addKnob (direct, ParamIDs::busACompAttack, "Attack");
-    addKnob (direct, ParamIDs::busACompRelease, "Release");
-    addKnob (direct, ParamIDs::busACompMakeup, "Makeup");
+    // Direct path, in signal-flow order.
+    auto& direct = addSection ("Direct - De-Ess Pre / FET");
+    addToggle (direct, ParamIDs::directDeessPreEnabled, "De-Ess Pre");
+    addKnob (direct, ParamIDs::directDeessPreFreq, "Pre Freq");
+    addKnob (direct, ParamIDs::directDeessPreThreshold, "Pre Thr");
+    addToggle (direct, ParamIDs::directFetEnabled, "FET");
+    addKnob (direct, ParamIDs::directFetThreshold, "FET Thr");
+    addKnob (direct, ParamIDs::directFetAttack, "FET Atk");
+    addKnob (direct, ParamIDs::directFetRelease, "FET Rel");
+    addKnob (direct, ParamIDs::directFetMakeup, "FET Makeup");
 
-    auto& direct2 = addSection ("Bus A - Direct (cont.)");
-    addToggle (direct2, ParamIDs::busADeessEnabled, "De-Ess");
-    addKnob (direct2, ParamIDs::busADeessFreq, "De-Ess Freq");
-    addKnob (direct2, ParamIDs::busADeessThreshold, "De-Ess Thr");
-    addKnob (direct2, ParamIDs::busASatDrive, "Sat Drive");
-    addKnob (direct2, ParamIDs::busALevel, "Level");
-    addToggle (direct2, ParamIDs::busAMute, "Mute");
-    addToggle (direct2, ParamIDs::busASolo, "Solo");
+    auto& directEq = addSection ("Direct - Console EQ / Sat / De-Ess Post");
+    addToggle (directEq, ParamIDs::directEqHpfEnabled, "HPF");
+    addChoice (directEq, ParamIDs::directEqHpfFreq, "HPF Freq");
+    addChoice (directEq, ParamIDs::directEqLowFreq, "Low Freq");
+    addKnob (directEq, ParamIDs::directEqLowGain, "Low Gain");
+    addChoice (directEq, ParamIDs::directEqMidFreq, "Mid Freq");
+    addKnob (directEq, ParamIDs::directEqMidGain, "Mid Gain");
+    addKnob (directEq, ParamIDs::directEqHighGain, "High Gain");
+    addKnob (directEq, ParamIDs::directEqDrive, "EQ Drive");
+    addKnob (directEq, ParamIDs::directSatDrive, "Sat Drive");
+    addToggle (directEq, ParamIDs::directDeessPostEnabled, "De-Ess Post");
+    addKnob (directEq, ParamIDs::directDeessPostFreq, "Post Freq");
+    addKnob (directEq, ParamIDs::directDeessPostThreshold, "Post Thr");
 
-    // Bus B - Opto sandwich.
-    auto& optoSection = addSection ("Bus B - Opto");
-    addChoice (optoSection, ParamIDs::busBLowBoostFreq, "Low Freq");
-    addKnob (optoSection, ParamIDs::busBLowBoostGain, "Low Boost");
-    addChoice (optoSection, ParamIDs::busBHighBoostFreq, "High Freq");
-    addKnob (optoSection, ParamIDs::busBHighBoostGain, "High Boost");
-    addKnob (optoSection, ParamIDs::busBOptoReduction, "Peak Red.");
-    addKnob (optoSection, ParamIDs::busBOptoMakeup, "Makeup");
-    addKnob (optoSection, ParamIDs::busBAirGain, "Air");
-    addKnob (optoSection, ParamIDs::busBLevel, "Level");
-    addToggle (optoSection, ParamIDs::busBMute, "Mute");
-    addToggle (optoSection, ParamIDs::busBSolo, "Solo");
+    // Bus (1) CRUSH.
+    auto& crush = addSection ("(1) Crush");
+    addKnob (crush, ParamIDs::crushInput, "Input");
+    addChoice (crush, ParamIDs::crushRatio, "Ratio");
+    addChoice (crush, ParamIDs::crushStyle, "Style");
+    addKnob (crush, ParamIDs::crushAttack, "Attack");
+    addKnob (crush, ParamIDs::crushRelease, "Release");
+    addKnob (crush, ParamIDs::crushOutput, "Output");
+    addKnob (crush, ParamIDs::crushLevel, "Level");
+    addToggle (crush, ParamIDs::crushMute, "Mute");
+    addToggle (crush, ParamIDs::crushAudition, "Audition");
 
-    // Bus C - Smash.
-    auto& smashSection = addSection ("Bus C - Smash");
-    addKnob (smashSection, ParamIDs::busCAttack, "Attack");
-    addKnob (smashSection, ParamIDs::busCRelease, "Release");
-    addKnob (smashSection, ParamIDs::busCDrive, "Drive");
-    addKnob (smashSection, ParamIDs::busCOutputTrim, "Out Trim");
-    addKnob (smashSection, ParamIDs::busCLevel, "Level");
-    addToggle (smashSection, ParamIDs::busCMute, "Mute");
-    addToggle (smashSection, ParamIDs::busCSolo, "Solo");
+    // Bus (2) SANDWICH.
+    auto& sandPre = addSection ("(2) Sandwich - Pre EQ");
+    addChoice (sandPre, ParamIDs::sandPreLfFreq, "LF Freq");
+    addKnob (sandPre, ParamIDs::sandPreLfBoost, "LF Boost");
+    addKnob (sandPre, ParamIDs::sandPreLfCut, "LF Cut");
+    addChoice (sandPre, ParamIDs::sandPreHfBellFreq, "Bell Freq");
+    addKnob (sandPre, ParamIDs::sandPreHfBellBoost, "Bell Boost");
+    addKnob (sandPre, ParamIDs::sandPreHfBellBandwidth, "Bell BW");
+    addChoice (sandPre, ParamIDs::sandPreHfShelfFreq, "Shelf Freq");
+    addKnob (sandPre, ParamIDs::sandPreHfShelfAtten, "Shelf Atten");
 
-    // Bus D - Slap.
-    auto& slapSection = addSection ("Bus D - Slap");
-    addKnob (slapSection, ParamIDs::busDDelayMs, "Delay");
-    addKnob (slapSection, ParamIDs::busDFeedback, "Feedback");
-    addKnob (slapSection, ParamIDs::busDHpFreq, "Loop HP");
-    addKnob (slapSection, ParamIDs::busDLpFreq, "Loop LP");
-    addToggle (slapSection, ParamIDs::busDMono, "Mono");
-    addKnob (slapSection, ParamIDs::busDLevel, "Level");
-    addToggle (slapSection, ParamIDs::busDMute, "Mute");
-    addToggle (slapSection, ParamIDs::busDSolo, "Solo");
+    auto& sandOpto = addSection ("(2) Sandwich - Opto");
+    addKnob (sandOpto, ParamIDs::sandPeakRed, "Peak Red.");
+    addToggle (sandOpto, ParamIDs::sandLimit, "Limit");
+    addKnob (sandOpto, ParamIDs::sandEmphasis, "Emphasis");
+    addToggle (sandOpto, ParamIDs::sandResidual, "Residual");
+
+    auto& sandPost = addSection ("(2) Sandwich - Post EQ / Return");
+    addChoice (sandPost, ParamIDs::sandPostLfFreq, "LF Freq");
+    addKnob (sandPost, ParamIDs::sandPostLfBoost, "LF Boost");
+    addKnob (sandPost, ParamIDs::sandPostLfCut, "LF Cut");
+    addChoice (sandPost, ParamIDs::sandPostHfBellFreq, "Bell Freq");
+    addKnob (sandPost, ParamIDs::sandPostHfBellBoost, "Bell Boost");
+    addKnob (sandPost, ParamIDs::sandPostHfBellBandwidth, "Bell BW");
+    addChoice (sandPost, ParamIDs::sandPostHfShelfFreq, "Shelf Freq");
+    addKnob (sandPost, ParamIDs::sandPostHfShelfAtten, "Shelf Atten");
+    addKnob (sandPost, ParamIDs::sandLevel, "Level");
+    addToggle (sandPost, ParamIDs::sandMute, "Mute");
+    addToggle (sandPost, ParamIDs::sandAudition, "Audition");
+
+    // Bus (3) SPREAD.
+    auto& spread = addSection ("(3) Spread");
+    addKnob (spread, ParamIDs::spreadDetune, "Detune");
+    addKnob (spread, ParamIDs::spreadTime, "Time");
+    addKnob (spread, ParamIDs::spreadWidth, "Width");
+    addKnob (spread, ParamIDs::spreadLevel, "Level");
+    addToggle (spread, ParamIDs::spreadMute, "Mute");
+    addToggle (spread, ParamIDs::spreadAudition, "Audition");
+
+    // Bus (4) SLAP.
+    auto& slap = addSection ("(4) Slap");
+    addKnob (slap, ParamIDs::slapTime, "Time");
+    addToggle (slap, ParamIDs::slapStereo, "Stereo");
+    addKnob (slap, ParamIDs::slapTone, "Tone");
+    addKnob (slap, ParamIDs::slapLevel, "Level");
+    addToggle (slap, ParamIDs::slapMute, "Mute");
+    addToggle (slap, ParamIDs::slapAudition, "Audition");
 
     requiredHeight = margin * 2 + static_cast<int> (sections.size()) * rowHeight;
 

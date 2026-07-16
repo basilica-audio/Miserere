@@ -3,10 +3,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-// M1 guarantee 10 (latency part): busses A-C are minimum-phase/causal with
-// no lookahead, and Bus D's slap delay is the effect itself rather than a
-// compensation artefact, so Miserere reports exactly 0 samples of latency
-// at all times (see docs/adr/0003-parallel-bus-topology.md).
+// Guarantee 9 (latency part): busses (1)/(2) are minimum-phase/causal with
+// no lookahead, and busses (3)/(4)'s delays are the effects themselves
+// rather than compensation artefacts, so Miserere reports exactly 0 samples
+// of latency at all times (see docs/adr/0003-parallel-bus-topology.md).
 TEST_CASE ("getLatencySamples() reports zero latency, before and after prepareToPlay", "[latency]")
 {
     MiserereAudioProcessor processor;
