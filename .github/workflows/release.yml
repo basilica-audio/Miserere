@@ -1,5 +1,6 @@
-# release.yml — tag-triggered signed release build (template for all suite repos).
-# Replace Miserere with the CMake target name (e.g. Silentium).
+# release.yml — tag-triggered signed release build.
+# Reconciled with the suite-wide template at
+# ~/Development/Audio/.scaffold/release-workflow-template.yml (CMake target: Miserere).
 #
 # Security model:
 #   - Triggered only by tags pushed to this repo (never by fork PRs; secrets are
@@ -17,8 +18,29 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the GitHub release for this tag (idempotent)
+        # Both release-macos and release-windows upload assets via
+        # `gh release upload`, which requires the release object to already
+        # exist for the tag - neither job created it, so both failed with
+        # "release not found" on a fresh tag push. `gh release view` first
+        # makes re-runs (e.g. after a transient build failure) idempotent
+        # instead of erroring on an already-created release.
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   release-macos:
     name: Signed macOS release
+    needs: create-release
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -67,11 +89,28 @@ jobs:
         run: |
           set -euo pipefail
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
-          ROOT="build/Miserere_artefacts/Release"
+          ARTEFACT_ROOT="build/Miserere_artefacts"
+          # JUCE's artefact path may or may not include a Release/ segment
+          # depending on whether the generator is single- or multi-config
+          # (this build uses single-config Ninja); see the equivalent
+          # find-based lookup in ci.yml's "Locate plugin artefacts" step.
+          find_artefact_dir() {
+            local pattern="$1"
+            local path
+            path=$(find "$ARTEFACT_ROOT" -type d -iname "$pattern" | head -n 1)
+            if [ -z "$path" ]; then
+              echo "::error::No $pattern artefact found under $ARTEFACT_ROOT"
+              exit 1
+            fi
+            dirname "$path"
+          }
+          COMPONENT_DIR=$(find_artefact_dir "*.component")
+          VST3_DIR=$(find_artefact_dir "*.vst3")
+          STANDALONE_DIR=$(find_artefact_dir "*.app")
           mkdir -p stage/AU stage/VST3 stage/Standalone
-          cp -R "$ROOT/AU/"*.component stage/AU/
-          cp -R "$ROOT/VST3/"*.vst3 stage/VST3/
-          cp -R "$ROOT/Standalone/"*.app stage/Standalone/
+          cp -R "$COMPONENT_DIR/"*.component stage/AU/
+          cp -R "$VST3_DIR/"*.vst3 stage/VST3/
+          cp -R "$STANDALONE_DIR/"*.app stage/Standalone/
           for B in stage/AU/*.component stage/VST3/*.vst3 stage/Standalone/*.app; do
             codesign --force --options runtime --timestamp --sign "$IDENTITY" "$B"
             codesign --verify --strict "$B"
@@ -100,6 +139,7 @@ jobs:
 
   release-windows:
     name: Windows release (unsigned)
+    needs: create-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -120,10 +160,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="build/Miserere_artefacts/Release"
+          ARTEFACT_ROOT="build/Miserere_artefacts"
+          # JUCE's artefact path may or may not include a Release/ segment
+          # depending on whether the generator is single- or multi-config;
+          # see the equivalent find-based lookup in ci.yml's "Locate plugin
+          # artefacts" step.
+          find_artefact_dir() {
+            local type_flag="$1" pattern="$2"
+            local path
+            path=$(find "$ARTEFACT_ROOT" -type "$type_flag" -iname "$pattern" | head -n 1)
+            if [ -z "$path" ]; then
+              echo "::error::No $pattern artefact found under $ARTEFACT_ROOT"
+              exit 1
+            fi
+            dirname "$path"
+          }
+          VST3_DIR=$(find_artefact_dir d "*.vst3")
+          STANDALONE_DIR=$(find_artefact_dir f "*.exe")
           mkdir -p stage/VST3 stage/Standalone
-          cp -R "$ROOT/VST3/"*.vst3 stage/VST3/
-          cp "$ROOT/Standalone/"*.exe stage/Standalone/
+          cp -R "$VST3_DIR/"*.vst3 stage/VST3/
+          cp "$STANDALONE_DIR/"*.exe stage/Standalone/
           SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           cd stage && 7z a "../$SLUG-$GITHUB_REF_NAME-windows.zip" . && cd ..
           gh release upload "$GITHUB_REF_NAME" "$SLUG-$GITHUB_REF_NAME-windows.zip" --clobber -R "$GITHUB_REPOSITORY"
