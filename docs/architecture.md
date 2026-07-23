@@ -112,6 +112,40 @@ qualitative "bump below/at corner, dip in the low-mids" shape with comfortable m
 `docs/research-notes.md`'s Passive EQ section for the full reasoning and the caveat that this
 is a deliberate simplification, not a literal passive-network simulation.
 
+### M2 voicing pass: CRUSH's program-dependent colour
+
+The v2 `FetCrush` implementation left the design brief's "Color" line only partly modelled:
+the detector-ripple colouration that falls out of correct sample-rate gain computation was
+already present, but the brief's second sentence - "add only mild class-A-style asymmetric
+harmonics + transformer LF saturation, level-dependent, <0.5% THD at moderate GR" - was not
+yet built (`docs/research-notes.md`'s FET section: "Less than 0.5% THD... at 1.1 seconds
+release", framed as a side effect of the correct gain computer plus ballistics, not a baked-in
+waveshaper). The M2 voicing pass adds exactly those two small stages, gated by a
+`colourAmount` term that tracks the CURRENT gain reduction (0 at no GR, full strength at
+`harmonicReferenceGrDb` = 12 dB of GR) so a quiet, uncompressed signal stays clean:
+
+- **Class-A-style asymmetric term**: `asymmetryMaxAmount * colourAmount * x * |x|` added to
+  the (clean) attenuated sample - an even-harmonic addition (still an odd function of `x`, so
+  overall polarity is respected) that biases the two half-cycles differently, the classic
+  single-ended gain-stage signature.
+- **Transformer-style LF-selective saturation**: a one-pole lowpass (~150 Hz) tracks the LF
+  band of the attenuated signal; only that band is driven into `tanh` (extra drive scaled by
+  `colourAmount`), and only the resulting (also `colourAmount`-gated) delta is added back -
+  broadband content above the cutoff is untouched. This reflects a real output transformer's
+  core saturating more at low frequencies for a given level, rather than adding broadband
+  distortion uniformly.
+
+Both terms are engineering approximations tuned by ear and by measurement (regression-frozen
+in `tests/FetCrushTests.cpp`'s `[colour]` cases: negligible THD at zero GR, THD growing with
+GR, a mild ceiling at moderate GR, and measurably more added harmonic content on a low-frequency
+tone than a high-frequency one at equal drive) - not a bench-measured match to any specific
+hardware unit's THD curve. Processing cost: one extra `tanh` and one one-pole filter update per
+sample per channel, alongside the module's existing per-sample `sqrt`/`log`/`pow` calls for the
+envelope-to-dB/dB-to-gain conversions; a throwaway timing probe (20 000 stereo 512-sample
+blocks, unoptimised Debug build, single core) processed ~213 s of audio in ~1.46 s (~146×
+real-time), so the addition is not a meaningful CPU concern even before Release-build
+optimisation.
+
 ### Spread: delay-line Doppler pitch shifting
 
 `SpreadPitch` implements the classic "modulated delay, glide/crossfade" pitch-shift

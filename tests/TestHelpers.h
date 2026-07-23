@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_dsp/juce_dsp.h>
 
 #include <cmath>
 
@@ -132,5 +133,72 @@ namespace TestHelpers
         }
 
         return maxDiff > 0.0f ? 20.0 * std::log10 (static_cast<double> (maxDiff)) : -200.0;
+    }
+
+    // Magnitude of a single frequency bin (nearest FFT bin to `targetHz`) in
+    // a Hann-windowed magnitude spectrum of `numSamples` samples starting at
+    // `startSample` in `channel` - the same "quadratic peak interpolation
+    // not needed, just read the nearest bin" approach SpreadPitchTests.cpp
+    // uses for its FFT probe, generalised so harmonic-content tests
+    // (fundamental + Nth-harmonic bin ratios -> THD-style measurements) can
+    // share one implementation instead of re-deriving FFT plumbing per test
+    // file.
+    inline double fftBinMagnitude (const juce::AudioBuffer<float>& buffer,
+                                    int channel,
+                                    int startSample,
+                                    int numSamples,
+                                    double sampleRate,
+                                    double targetHz)
+    {
+        int order = 0;
+        while ((1 << order) < numSamples)
+            ++order;
+
+        const auto fftSize = 1 << order;
+        juce::dsp::FFT fft (order);
+
+        std::vector<float> fftBuffer (static_cast<size_t> (fftSize) * 2, 0.0f);
+        const auto* data = buffer.getReadPointer (channel) + startSample;
+
+        for (int i = 0; i < fftSize && i < numSamples; ++i)
+            fftBuffer[static_cast<size_t> (i)] = data[i];
+
+        juce::dsp::WindowingFunction<float> window (static_cast<size_t> (fftSize), juce::dsp::WindowingFunction<float>::hann);
+        window.multiplyWithWindowingTable (fftBuffer.data(), static_cast<size_t> (fftSize));
+
+        fft.performFrequencyOnlyForwardTransform (fftBuffer.data());
+
+        const auto bin = juce::jlimit (0, fftSize / 2 - 1, static_cast<int> (std::lround (targetHz * fftSize / sampleRate)));
+        return static_cast<double> (fftBuffer[static_cast<size_t> (bin)]);
+    }
+
+    // Total-harmonic-distortion-style estimate: sqrt(sum of harmonic-bin
+    // magnitudes squared, harmonics 2..maxHarmonic) / fundamental-bin
+    // magnitude, expressed as a ratio (multiply by 100 for a percentage).
+    // Not a full THD+N measurement (no noise floor integration, discrete
+    // harmonic bins only) but sufficient to regression-freeze "how much
+    // harmonic content did this stage add, relative to the fundamental".
+    inline double estimateThdRatio (const juce::AudioBuffer<float>& buffer,
+                                     int channel,
+                                     int startSample,
+                                     int numSamples,
+                                     double sampleRate,
+                                     double fundamentalHz,
+                                     int maxHarmonic = 6)
+    {
+        const auto fundamentalMag = fftBinMagnitude (buffer, channel, startSample, numSamples, sampleRate, fundamentalHz);
+
+        if (fundamentalMag <= 1.0e-9)
+            return 0.0;
+
+        double sumSquares = 0.0;
+
+        for (int harmonic = 2; harmonic <= maxHarmonic; ++harmonic)
+        {
+            const auto mag = fftBinMagnitude (buffer, channel, startSample, numSamples, sampleRate, fundamentalHz * harmonic);
+            sumSquares += mag * mag;
+        }
+
+        return std::sqrt (sumSquares) / fundamentalMag;
     }
 }

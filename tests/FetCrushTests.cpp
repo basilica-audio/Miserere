@@ -368,3 +368,116 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
     // channel's gain down measurably below the drive-only baseline.
     CHECK (linkedRightGainDb < unlinkedRightGainDb - 3.0);
 }
+
+//==============================================================================
+// M2 voicing pass: program-dependent colour (design-brief.md's CRUSH "Color"
+// line; docs/research-notes.md's FET section - "Less than 0.5% THD ... at
+// 1.1 seconds release", modelled as a small, GR-gated asymmetric-harmonic +
+// transformer-style LF-saturation addition on top of the existing, untouched
+// detector-ripple colouration).
+namespace
+{
+    // Measures a THD-style ratio (harmonics 2-6 vs the fundamental, see
+    // TestHelpers::estimateThdRatio) on FetCrush's settled tail output for a
+    // steady tone, after driving hard enough to reach a target gain
+    // reduction.
+    double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude, float attackStep = 7.0f, float releaseStep = 7.0f)
+    {
+        FetCrush crush;
+        crush.setRatio (ratio);
+        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setInputDriveDb (driveDb);
+        crush.setAttackStep (attackStep);
+        crush.setReleaseStep (releaseStep);
+        crush.prepare (makeTestSpec (1));
+
+        juce::AudioBuffer<float> buffer (1, testBlockSize);
+        TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, amplitude);
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        crush.process (block);
+
+        // A whole number of cycles in the measurement window keeps the FFT
+        // bins landing exactly on the fundamental/harmonics (no spectral
+        // leakage inflating the estimate).
+        const auto cyclesPerWindow = std::floor (frequencyHz * (testBlockSize - settleSamples) / testSampleRate);
+        const auto windowSamples = static_cast<int> (cyclesPerWindow * testSampleRate / frequencyHz);
+
+        return TestHelpers::estimateThdRatio (buffer, 0, settleSamples, windowSamples, testSampleRate, frequencyHz);
+    }
+}
+
+TEST_CASE ("Crush: colour stage stays negligible when the signal never reaches gain reduction", "[dsp][crush][colour]")
+{
+    // Well below every ratio's threshold (even r20's -24 dB) at 0 dB drive:
+    // reductionDb stays 0, so colourAmount is gated to 0 throughout.
+    const auto thd = measureThdAtDrive (FetCrush::Ratio::r4, 0.0f, 1000.0, 0.02f);
+    CHECK (thd < 0.002); // < 0.2%
+}
+
+TEST_CASE ("Crush: colour stage's harmonic content grows with gain reduction (level-dependent, design-brief.md)", "[dsp][crush][colour]")
+{
+    const auto lowGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 6.0f, 1000.0, 0.3f);
+    const auto highGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f);
+
+    INFO ("low-GR THD = " << lowGrThd << ", high-GR THD = " << highGrThd);
+    CHECK (highGrThd > lowGrThd);
+}
+
+TEST_CASE ("Crush: colour stage stays under a mild THD ceiling at moderate gain reduction", "[dsp][crush][colour]")
+{
+    // "Moderate GR" here targets roughly half of harmonicReferenceGrDb
+    // (~6 dB) - an engineering calibration choice tuned to sit comfortably
+    // under 1%, in the spirit of (not a bench-measured match to) the
+    // hardware's own "less than 0.5% THD" framing (docs/research-notes.md).
+    FetCrush crush;
+    crush.setRatio (FetCrush::Ratio::r20);
+    crush.setInputDriveDb (2.0f);
+    crush.setAttackStep (7.0f);
+    crush.setReleaseStep (7.0f);
+    crush.prepare (makeTestSpec (1));
+
+    juce::AudioBuffer<float> buffer (1, testBlockSize);
+    TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.1f);
+    juce::dsp::AudioBlock<float> block (buffer);
+    crush.process (block);
+
+    INFO ("measured GR = " << crush.getCurrentGainReductionDb());
+    REQUIRE (crush.getCurrentGainReductionDb() > 3.0f);
+    REQUIRE (crush.getCurrentGainReductionDb() < 12.0f);
+
+    const auto thd = measureThdAtDrive (FetCrush::Ratio::r20, 2.0f, 1000.0, 0.1f);
+    CHECK (thd < 0.01); // < 1%
+}
+
+TEST_CASE ("Crush: colour is LF-selective - a low-frequency tone shows more added harmonic content than a high-frequency tone at equal drive", "[dsp][crush][colour][lf]")
+{
+    // Both tones settle to essentially the same envelope/GR (the detector
+    // tracks amplitude, not frequency); the LF-band transformer-style term
+    // only engages fully below its ~150 Hz cutoff, so an 80 Hz tone should
+    // show measurably more added harmonic content than a 5 kHz tone under
+    // the same drive.
+    const auto lowFreqThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 80.0, 0.3f);
+    const auto highFreqThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 5000.0, 0.3f);
+
+    INFO ("80 Hz THD = " << lowFreqThd << ", 5 kHz THD = " << highFreqThd);
+    CHECK (lowFreqThd > highFreqThd);
+}
+
+TEST_CASE ("Crush: colour stage keeps output finite and bounded at full-scale drive", "[dsp][crush][colour][robustness]")
+{
+    FetCrush crush;
+    crush.setRatio (FetCrush::Ratio::rAll);
+    crush.setInputDriveDb (48.0f);
+    crush.setAttackStep (7.0f);
+    crush.setReleaseStep (1.0f);
+    crush.prepare (makeTestSpec (2));
+
+    juce::AudioBuffer<float> buffer (2, testBlockSize);
+    TestHelpers::fillWithSine (buffer, testSampleRate, 200.0, 1.0f);
+    juce::dsp::AudioBlock<float> block (buffer);
+    crush.process (block);
+
+    CHECK (TestHelpers::allSamplesFinite (buffer));
+    CHECK (TestHelpers::peakAbsolute (buffer) < 4.0f);
+}

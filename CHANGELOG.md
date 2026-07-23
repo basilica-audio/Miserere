@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-23
+
+### Added — M2 voicing pass: CRUSH program-dependent colour
+
+- **Bus ① CRUSH (`src/dsp/FetCrush.{h,cpp}`)**: added the design brief's "Color" line that
+  the v2 rewrite had left unbuilt (`docs/research-notes.md`'s FET section: "Less than 0.5%
+  THD... at 1.1 seconds release") - a small, gain-reduction-gated pair of colour stages on
+  top of the existing (untouched) detector-ripple colouration:
+  - A class-A-style asymmetric term (a small even-harmonic addition biasing the two
+    half-cycles differently, the classic single-ended-stage signature).
+  - A transformer-style LF-selective soft saturation (a one-pole ~150 Hz lowpass extract
+    driven into `tanh`, so the added colour concentrates below the cutoff rather than
+    spreading broadband, matching a real output transformer's core saturating more at low
+    frequencies for a given level).
+  - Both terms are gated by how hard the limiter is currently working (0 at no gain
+    reduction, full strength at 12 dB of GR), so a quiet, uncompressed signal stays clean.
+    Engineering approximations tuned by measurement, not a bench-measured match to any
+    specific hardware unit's THD curve - see `docs/architecture.md`'s "M2 voicing pass"
+    section for the full reasoning and the honest by-ear-vs-measured framing.
+- Regression-frozen with five new Catch2 cases (`tests/FetCrushTests.cpp`'s `[colour]`
+  tag): negligible THD below gain reduction, THD growing with GR (level-dependence), a mild
+  THD ceiling at moderate GR, more added harmonic content on a low-frequency tone than a
+  high-frequency one at equal drive (the LF-selectivity claim), and finite/bounded output at
+  full-scale drive. 127 Catch2 tests green (up from 122).
+- CPU cost: one extra `tanh` call and one one-pole filter update per sample per channel,
+  alongside the module's existing per-sample envelope-to-dB/dB-to-gain transcendental calls;
+  a rough timing probe (unoptimised Debug build, single core) processed ~213 s of stereo
+  audio in ~1.46 s (~146× real-time) - no oversampling added, no measurable CPU concern.
+
 ## [0.3.0] — 2026-07-16
 
 ### Added — M2 preset system + German frame localisation
