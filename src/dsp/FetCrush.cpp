@@ -70,6 +70,7 @@ void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)
     const auto numChannels = static_cast<size_t> (spec.numChannels);
     envelopeState.assign (numChannels, 0.0f);
     compressionDuration.assign (numChannels, 0.0f);
+    lfSaturationState.assign (numChannels, 0.0f);
 
     reset();
 }
@@ -78,6 +79,7 @@ void FetCrush::reset()
 {
     std::fill (envelopeState.begin(), envelopeState.end(), 0.0f);
     std::fill (compressionDuration.begin(), compressionDuration.end(), 0.0f);
+    std::fill (lfSaturationState.begin(), lfSaturationState.end(), 0.0f);
     currentGainReductionDb = 0.0f;
 }
 
@@ -113,6 +115,11 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
 
     const auto durationRiseCoeff = std::exp (-1.0 / (durationRiseTauSeconds * sampleRate));
     const auto durationFallCoeff = std::exp (-1.0 / (durationFallTauSeconds * sampleRate));
+
+    // One-pole LF-band tracker for the transformer-style colour term - see
+    // class comment. Fixed cutoff, so the rise coefficient only depends on
+    // sample rate.
+    const auto lfAlpha = static_cast<float> (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * lfSaturationCutoffHz / sampleRate));
 
     float peakGainReductionDb = 0.0f;
 
@@ -158,7 +165,33 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
             duration = static_cast<float> (durationCoeff * duration + (1.0 - durationCoeff) * durationTarget);
 
             const auto gainFactor = juce::Decibels::decibelsToGain (-reductionDb);
-            data[sample] = drivenSample * gainFactor * outputTrimLinear;
+            const auto attenuated = drivenSample * gainFactor;
+
+            // Program-dependent colour (M2 voicing pass) - see class
+            // comment. Both terms are gated by `colourAmount`, which tracks
+            // how hard the limiter is presently working (0 for a clean,
+            // unreduced signal; full strength at harmonicReferenceGrDb of
+            // GR), so a quiet passage stays clean and the colour only
+            // appears under real limiting.
+            const auto colourAmount = juce::jlimit (0.0f, 1.0f, reductionDb / harmonicReferenceGrDb);
+
+            // Transformer-style LF-selective saturation: track the LF band
+            // with a one-pole lowpass, drive only that band into tanh, and
+            // add back just the (gated) distortion delta - broadband
+            // content above the cutoff is untouched.
+            auto& lfState = lfSaturationState[channel];
+            lfState += lfAlpha * (attenuated - lfState);
+            const auto lfDriveLinear = 1.0f + colourAmount * lfHarmonicMaxDriveExtra;
+            const auto lfSaturated = std::tanh (lfDriveLinear * lfState) / lfDriveLinear;
+            const auto lfColourDelta = (lfSaturated - lfState) * colourAmount;
+
+            // Class-A-style asymmetric term: an even-harmonic addition
+            // (x * |x|, an odd function so it still respects overall
+            // polarity) that biases the two half-cycles differently, the
+            // signature of a single-ended gain stage.
+            const auto asymmetricDelta = asymmetryMaxAmount * colourAmount * attenuated * std::abs (attenuated);
+
+            data[sample] = (attenuated + lfColourDelta + asymmetricDelta) * outputTrimLinear;
 
             peakGainReductionDb = juce::jmax (peakGainReductionDb, reductionDb);
         }

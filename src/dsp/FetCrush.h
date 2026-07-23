@@ -32,8 +32,25 @@
 //   hard - the "snap" the brief specifies.
 // - **Gentle style**: a fixed, softer 2:1 voicing (the later-era rear-bus
 //   flavour) that ignores the ratio/ALL selector entirely.
+// - **Program-dependent colour (M2 voicing pass, docs/research-notes.md's
+//   "FET" section + design-brief.md's CRUSH "Color" line)**: the detector
+//   ripple that already falls out of the gain computer is kept untouched;
+//   ADDED on top is a small, level-dependent pair of stages gated by the
+//   CURRENT gain reduction (so a quiet, uncompressed signal stays clean and
+//   the colour only appears "at moderate-to-heavy GR", matching the
+//   hardware's own "less than 0.5% THD... at 1.1 seconds release" framing):
+//   a class-A-style asymmetric term (a small even-harmonic addition that
+//   biases compression differently between half-cycles, the classic
+//   single-ended-stage signature) and a transformer-style LF-selective soft
+//   saturation (a one-pole low-band extract driven into tanh - a real output
+//   transformer's core saturates more at low frequencies for a given level,
+//   so this stage's contribution is concentrated below its cutoff rather
+//   than broadband). Both terms are engineering approximations tuned to stay
+//   subtle at typical operating points, not a measured match to any specific
+//   hardware unit's bench THD curve (see docs/research-notes.md's framing).
 //
-// Minimum-phase/causal: a pure per-sample gain multiply with no lookahead,
+// Minimum-phase/causal: a pure per-sample gain multiply (plus the two small
+// memoryless/one-pole colour terms above) with no lookahead,
 // zero added latency - keeps the CRUSH bus sample-aligned with the Direct
 // path per the suite's phase discipline (docs/adr/0003).
 //
@@ -114,10 +131,20 @@ private:
 
     static constexpr float allButtonsAttackLagMs = 4.0f; // extra attack lag -> transient overshoot ("snap")
 
+    // Program-dependent colour (see class comment): both terms are gated by
+    // how hard the limiter is currently working, reaching full strength at
+    // `harmonicReferenceGrDb` of gain reduction and staying at ~0 for a
+    // clean, unreduced signal.
+    static constexpr float harmonicReferenceGrDb = 12.0f;
+    static constexpr float lfSaturationCutoffHz = 150.0f;   // transformer-style LF corner
+    static constexpr float lfHarmonicMaxDriveExtra = 3.0f;  // extra tanh drive added to the LF band at full colour amount
+    static constexpr float asymmetryMaxAmount = 0.15f;      // class-A even-harmonic term's peak coefficient
+
     double sampleRate = 44100.0;
 
     std::vector<float> envelopeState;         // per-channel squared-signal envelope (detector)
     std::vector<float> compressionDuration;   // per-channel 0..1 "how long have we been compressing" integrator
+    std::vector<float> lfSaturationState;     // per-channel one-pole LF-band tracker for the transformer-style colour term
 
     float inputDriveLinear = 1.0f;
     float outputTrimLinear = 1.0f;
