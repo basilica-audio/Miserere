@@ -93,16 +93,32 @@ private:
     static constexpr double wanderAmount = 0.10;    // +-10 % AM/PM
     static constexpr double maxWowFlutterFraction = 0.005; // 0.5 % at wobble = 1
 
+    // Unit-variance one-pole lowpass of white noise.
+    //
+    // A plain y = a*y + (1-a)*x collapses the noise as the time constant
+    // grows: its output variance is only (1-a)/(1+a) of the input's, which at
+    // tau = 2 s and a 3 kHz control rate is -41 dB. Written that way the
+    // "+-10 % AM/PM wander" the research specifies actually lands at +-0.05 %,
+    // the oscillators stay locked-periodic, and the flutter-lag
+    // autocorrelation sits at 0.955 (bar: < 0.95, tests/SlapDelayTests.cpp).
+    // Normalising by sqrt((1+a)/(1-a)) restores the intended depth at any
+    // control rate or time constant.
+    static double onePoleNoise (double state, double coeff, double excitation) noexcept
+    {
+        const auto normalisation = std::sqrt ((1.0 + coeff) / (1.0 - coeff));
+        return coeff * state + (1.0 - coeff) * normalisation * excitation;
+    }
+
     double computeControlValue() noexcept
     {
         const auto T = 1.0 / controlRate;
 
         // Slow AM/PM wander: one-pole filtered white noise, tau ~ 2 s.
         const auto wanderCoeff = std::exp (-T / wanderTauSeconds);
-        am1 = wanderCoeff * am1 + (1.0 - wanderCoeff) * nextBipolar();
-        am2 = wanderCoeff * am2 + (1.0 - wanderCoeff) * nextBipolar();
-        pm1 = wanderCoeff * pm1 + (1.0 - wanderCoeff) * nextBipolar();
-        pm2 = wanderCoeff * pm2 + (1.0 - wanderCoeff) * nextBipolar();
+        am1 = onePoleNoise (am1, wanderCoeff, nextBipolar());
+        am2 = onePoleNoise (am2, wanderCoeff, nextBipolar());
+        pm1 = onePoleNoise (pm1, wanderCoeff, nextBipolar());
+        pm2 = onePoleNoise (pm2, wanderCoeff, nextBipolar());
 
         phase1 += juce::MathConstants<double>::twoPi * f1Hz * T;
         phase2 += juce::MathConstants<double>::twoPi * f2Hz * T;
@@ -112,9 +128,9 @@ private:
         if (phase2 > juce::MathConstants<double>::twoPi)
             phase2 -= juce::MathConstants<double>::twoPi;
 
-        // Leaky-random-walk drift.
+        // Leaky-random-walk drift (same normalisation - see onePoleNoise).
         const auto driftCoeff = std::exp (-juce::MathConstants<double>::twoPi * driftCutoffHz * T);
-        drift = driftCoeff * drift + (1.0 - driftCoeff) * nextBipolar();
+        drift = onePoleNoise (drift, driftCoeff, nextBipolar());
 
         const auto p1 = phase1 + wanderAmount * pm1;
         const auto p2 = phase2 + wanderAmount * pm2;

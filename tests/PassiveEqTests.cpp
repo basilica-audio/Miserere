@@ -176,23 +176,57 @@ TEST_CASE ("Passive EQ: LF boost alone is measurably positive at low frequency",
     CHECK (gainDb > 3.0);
 }
 
-TEST_CASE ("Passive EQ: LF cut alone attenuates below its corner, not the mids", "[dsp][passiveeq]")
+// v0.5.0 note (brief F2): the LF section is no longer an independent RBJ low
+// shelf - it is the EQP-1A LF sub-ladder's exact 2nd-order transfer function
+// evaluated from component values, so its cut skirt is now set by physics
+// rather than by a chosen shelf Q.
+//
+// That changes what "not the mids" can mean. A first-order-style shelf of
+// depth D dB necessarily places its zero and pole a factor 10^(D/20) apart:
+// at the ~20 dB the 100 Hz selector reaches at full cut, a corner near 140 Hz
+// forces the return-to-unity pole up around 1.3 kHz, so ~1.6 dB is still
+// showing at 2 kHz. That is the hardware's behaviour (the published EQP-1A
+// attenuation curves are famously broad), not a modelling slip - and it is
+// exactly why the unit's LF Atten is used with the Boost to shape a curve
+// rather than alone.
+//
+// The invariant worth pinning is therefore not "flat by 2 kHz" but "deep at
+// the bottom, monotonically returning, and completely out of the way by the
+// top of the band" - which is what the mid/HF sections need in order to stay
+// independent.
+TEST_CASE ("Passive EQ: LF cut alone attenuates below its corner and returns to unity by the top octaves", "[dsp][passiveeq]")
 {
-    PassiveEq low;
-    low.setLfFreqHz (100.0f);
-    low.setLfCutDial (10.0f);
-    low.setResidualEnabled (false);
-    const auto atLf = measureGainChangeDb (low, 40.0);
+    const auto cutAt = [] (double frequencyHz)
+    {
+        PassiveEq eq;
+        eq.setLfFreqHz (100.0f);
+        eq.setLfCutDial (10.0f);
+        eq.setResidualEnabled (false);
+        return measureGainChangeDb (eq, frequencyHz);
+    };
 
-    PassiveEq mid;
-    mid.setLfFreqHz (100.0f);
-    mid.setLfCutDial (10.0f);
-    mid.setResidualEnabled (false);
-    const auto atMid = measureGainChangeDb (mid, 2000.0);
+    const auto at40 = cutAt (40.0);
+    const auto at2k = cutAt (2000.0);
+    const auto at8k = cutAt (8000.0);
+    const auto at16k = cutAt (16000.0);
 
-    INFO ("cut at 40 Hz = " << atLf << " dB, at 2 kHz = " << atMid << " dB");
-    CHECK (atLf < -10.0);
-    CHECK (std::abs (atMid) < 1.0);
+    INFO ("cut at 40 Hz = " << at40 << " dB, 2 kHz = " << at2k
+                            << " dB, 8 kHz = " << at8k << " dB, 16 kHz = " << at16k << " dB");
+
+    // Deep where it is meant to act.
+    CHECK (at40 < -10.0);
+
+    // Monotonically returning towards unity, never overshooting into boost.
+    CHECK (at40 < at2k);
+    CHECK (at2k < at8k);
+    CHECK (at8k <= at16k);
+    CHECK (at16k <= 0.05);
+
+    // Small in the mids, and out of the way entirely across the top octaves -
+    // the bell/shelf sections above sit on an effectively flat pedestal.
+    CHECK (std::abs (at2k) < 2.0);
+    CHECK (std::abs (at8k) < 0.5);
+    CHECK (std::abs (at16k) < 0.2);
 }
 
 //==============================================================================
