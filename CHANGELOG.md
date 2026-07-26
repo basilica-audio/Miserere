@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-07-27
+
+The "Circuit Engines" release. Every per-bus module that used to be a textbook
+approximation is now derived from the circuit it is named after — and all of it still
+reports **zero latency**, because the anti-aliasing is done with antiderivative
+anti-aliasing and matched filters rather than oversampling.
+
+### Added
+
+- **Wobble** (SLAP, `slap_wobble`, default 0%) — tape-transport wow and flutter: a slow
+  pinch-roller wow, a faster capstan flutter with its second harmonic, and a leaky random
+  drift, each with slow independent wander so nothing is locked-periodic. 0–0.5% W&F across
+  the dial's range. At 0 the modulation is structurally off (the random generator is never
+  advanced), so the neutral render stays bit-identical between runs.
+- **Age** (SLAP, `slap_age`, default 0%) — tape wear: pink-shaped hiss with level-following
+  asperity noise plus extra head-to-tape spacing loss. At 0 both are structurally silent.
+- Two factory presets exercising the new controls: **Tape Slap 7.5** and **Worn Slap**.
+- New test suite `tests/AliasingTests.cpp` plus roughly 40 new measurement cases across the
+  existing suites (161 cases / 72 589 assertions total).
+
+### Changed — v0.5.0 voicing pass (this release changes how non-neutral settings sound)
+
+As with the v0.4.0 M2 pass, the fidelity upgrades below deliberately change the rendered
+sound of the SANDWICH and CRUSH busses and of the direct path's drive stages at non-neutral
+settings. Neutral is unaffected: with everything off the plugin is still bit-transparent, and
+old sessions still load with unchanged settings. Existing factory presets keep their stored
+values — none were retuned.
+
+- **CRUSH is now a feedback-FET engine.** The hand-built dual-rate release blend and duration
+  integrator are gone. A single-capacitor RC sidechain with the attack pot in the charge path
+  and the release pot in the discharge path is driven from the output, and the FET divider
+  cell carries the residual second-harmonic "hair" that grows with gain-reduction depth.
+  Ratio creep, attack/release interaction, the knee ordering across 4:1…20:1 and the
+  all-buttons overshoot are now *emergent* from the loop rather than tabulated — each pinned
+  by its own measurement. The all-buttons mode is a genuine fifth setting, never an
+  interpolation.
+- **SANDWICH is now a real photocell model.** The three-path `max()` detector and the
+  hand-authored static curves are gone, replaced by an electroluminescent-panel law feeding a
+  two-state carrier-density model. The two-stage release, the memory effect (longer and
+  deeper gain reduction releases more slowly) and the program-dependent attack all fall out
+  of the physics. Measured: 50% recovery in 30–120 ms with the last 10% taking over 400 ms.
+- **Anti-aliasing on every drive stage** via first-order antiderivative anti-aliasing in
+  *residual* form — the curve is split into an exactly sample-aligned linear part plus a
+  nonlinear residual, and only the residual is filtered. That is what lets the plugin
+  suppress aliasing without adding the half-sample delay or the high-frequency droop that
+  plain antiderivative anti-aliasing would impose, so the parallel busses stay
+  sample-aligned. Measured at 44.1 kHz: at least 12 dB less aliasing than the untreated
+  curve at the stress settings, and non-harmonic content at or below −60 dBFS on a
+  programme-realistic 3 kHz / −12 dBFS vocal-level anchor. No absolute floor is claimed at
+  full-scale stress extremes — see the manual.
+- **Decramped top octave.** The console EQ's 12 kHz shelf and the passive EQ's HF bell and
+  shelf now use magnitude-matched filters, so at 44.1 kHz the top octave keeps its analog
+  shape instead of being squeezed toward Nyquist.
+- **Passive EQ LF section rebuilt from component values.** The boost/cut network is now the
+  hardware ladder's exact transfer function, so the famous simultaneous boost-and-cut curve,
+  the cut corner sitting above the boost corner, and the gain/bandwidth coupling on the HF
+  bell are consequences of the circuit rather than of chosen filter settings.
+- **Console EQ drive is now a flux-domain iron model.** An ad-hoc squared term is replaced by
+  a flux integrator into a biased saturator and back out through the integrator's exact
+  inverse. Because magnetic flux scales as voltage over frequency, third-harmonic content now
+  rises toward the bass on its own (measured +12 dB from 100 Hz to 50 Hz) and the
+  second-to-third-harmonic ratio lands on the hardware measurement anchor.
+- **SLAP is a tape transport, not just a filtered delay.** Cubic Hermite fractional reads,
+  the record-side saturator moved ahead of the delay write (so repeats and input no longer
+  share one lump of saturation), a fixed head bump, and age-scaled spacing loss.
+- **SPREAD quality pass.** Third-order Lagrange interpolation on both shifter delay lines
+  (0.90 dB less high-frequency loss at 10 kHz than the previous linear read), per-sample
+  smoothing of Detune and Time so automation no longer steps at block boundaries, and a
+  longer equal-power grain crossfade.
+- **Mute and Audition no longer click** — bus routing now rides a 3 ms ramp. Muted busses
+  still contribute exact zeros once the ramp has settled.
+
+### Compatibility
+
+- Sessions and presets from v0.2.0–v0.4.0 load with every stored value intact. The two new
+  parameters default to exact neutral and are explicitly reset when a state that predates
+  them is loaded, so a project cannot inherit stale Wobble/Age from whatever was last dialled
+  in. State is now stamped with a schema version.
+- Automation lanes are stable: the new parameters are versioned as a later generation so
+  hosts cannot re-order them against the existing set.
+- Latency is still **0 samples**, and the neutral wire null and parallel-bus impulse
+  alignment are unchanged.
+
+### Known limitations
+
+- SPREAD's two crossfading taps read one delay line at a fixed offset, so a sustained pure
+  tone still meets a comb whose depth depends on the note. Broadband material is unaffected.
+  Correlation-aligned splicing is the fix and is on the roadmap.
+- After a long silence the SANDWICH bus rests around −150 dBFS rather than at exact zero
+  (roughly 30 dB below a 24-bit least-significant bit). Every other bus reaches exact zero.
+
 ## [0.4.0] — 2026-07-23
 
 ### Added — M2 voicing pass: CRUSH program-dependent colour
