@@ -387,6 +387,26 @@ namespace msrr
             50.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+        // Parameters added after v0.4.0 take the versionHint of the release
+        // generation that introduced them (v0.5.0 -> 2) - NEVER reuse 1:
+        // JUCE's version-hint-based AU/AUv3 parameter ordering would
+        // interleave hint-1 newcomers with the existing hint-1 set and
+        // silently remap automation lanes in Logic/GarageBand sessions
+        // (guarded by ParameterTests.cpp's getVersionHint() assertions).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::slapWobble, 2 },
+            "Slap Wobble",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            0.0f, // neutral: modulation structurally off
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::slapAge, 2 },
+            "Slap Age",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            0.0f, // neutral: noise + extra loss structurally off
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
         addLevelMuteAudition (layout, ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition, "Slap", -15.0f);
 
         return layout;

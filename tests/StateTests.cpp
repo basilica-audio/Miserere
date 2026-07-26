@@ -180,6 +180,101 @@ TEST_CASE ("State round-trip preserves every choice parameter", "[state][choice]
     }
 }
 
+//==============================================================================
+// v0.5.0 state-schema versioning (brief section 4 / test 6.10).
+
+TEST_CASE ("State migration: a v0.4.0 session loaded into a DIRTIED instance resets slap_wobble/slap_age to default", "[state][migration]")
+{
+    // Binding protocol (brief 6.10a): the instance is dirtied FIRST -
+    // wobble/age set non-zero - because JUCE's replaceState keeps a live
+    // instance's CURRENT values for parameters missing from the incoming
+    // tree (there is no default-fill). A fresh-instance round-trip has
+    // current == default and structurally cannot detect that failure mode.
+    MiserereAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    const auto setReal = [&] (const char* id, float value)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        param->setValueNotifyingHost (param->convertTo0to1 (value));
+    };
+
+    const auto realValue = [&] (const char* id)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        return param->convertFrom0to1 (param->getValue());
+    };
+
+    setReal (ParamIDs::slapWobble, 70.0f); // 0.7 normalised
+    setReal (ParamIDs::slapAge, 40.0f);    // 0.4 normalised
+    REQUIRE (realValue (ParamIDs::slapWobble) == Catch::Approx (70.0f).margin (0.1f));
+    REQUIRE (realValue (ParamIDs::slapAge) == Catch::Approx (40.0f).margin (0.1f));
+
+    // Load the checked-in v0.4.0 fixture (no stateVersion property, no
+    // wobble/age children).
+    const auto fixtureFile = juce::File (MSRR_TEST_FIXTURE_DIR).getChildFile ("state_v0_4_0.xml");
+    REQUIRE (fixtureFile.existsAsFile());
+
+    const auto xml = juce::XmlDocument::parse (fixtureFile);
+    REQUIRE (xml != nullptr);
+
+    juce::MemoryBlock binary;
+    juce::AudioProcessor::copyXmlToBinary (*xml, binary);
+    processor.setStateInformation (binary.getData(), static_cast<int> (binary.getSize()));
+
+    // Every pre-existing parameter restores its stored value...
+    CHECK (realValue (ParamIDs::inTrim) == Catch::Approx (3.0f).margin (0.01f));
+    CHECK (realValue (ParamIDs::outTrim) == Catch::Approx (-1.5f).margin (0.01f));
+    CHECK (realValue (ParamIDs::crushInput) == Catch::Approx (20.0f).margin (0.01f));
+    CHECK (realValue (ParamIDs::sandPeakRed) == Catch::Approx (65.0f).margin (0.1f));
+    CHECK (realValue (ParamIDs::slapTime) == Catch::Approx (95.0f).margin (0.01f));
+    CHECK (realValue (ParamIDs::slapTone) == Catch::Approx (62.5f).margin (0.1f));
+
+    // ...AND the v2-only parameters are back at their neutral defaults.
+    CHECK (realValue (ParamIDs::slapWobble) == Catch::Approx (0.0f).margin (1.0e-4f));
+    CHECK (realValue (ParamIDs::slapAge) == Catch::Approx (0.0f).margin (1.0e-4f));
+}
+
+TEST_CASE ("State schema: re-save stamps stateVersion = 2; v2 -> v2 round-trip is lossless incl. wobble/age", "[state][migration][version]")
+{
+    MiserereAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    const auto setReal = [&] (const char* id, float value)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        param->setValueNotifyingHost (param->convertTo0to1 (value));
+    };
+
+    setReal (ParamIDs::slapWobble, 35.0f);
+    setReal (ParamIDs::slapAge, 55.0f);
+
+    juce::MemoryBlock saved;
+    processor.getStateInformation (saved);
+
+    // The serialised tree carries stateVersion = 2.
+    const auto xml = juce::AudioProcessor::getXmlFromBinary (saved.getData(), static_cast<int> (saved.getSize()));
+    REQUIRE (xml != nullptr);
+    CHECK (xml->getIntAttribute ("stateVersion", -1) == 2);
+
+    // Round-trip through a dirtied state is lossless for the new params.
+    setReal (ParamIDs::slapWobble, 0.0f);
+    setReal (ParamIDs::slapAge, 0.0f);
+    processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+
+    const auto realValue = [&] (const char* id)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        return param->convertFrom0to1 (param->getValue());
+    };
+
+    CHECK (realValue (ParamIDs::slapWobble) == Catch::Approx (35.0f).margin (0.1f));
+    CHECK (realValue (ParamIDs::slapAge) == Catch::Approx (55.0f).margin (0.1f));
+}
+
 TEST_CASE ("State: a v1 session (unknown old busA_/busB_/busC_/busD_ IDs) loads without crashing", "[state][v1-import]")
 {
     // A hand-built ValueTree shaped like a real APVTS save: the same root
