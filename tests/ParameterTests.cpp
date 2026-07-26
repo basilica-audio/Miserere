@@ -138,3 +138,63 @@ TEST_CASE ("Defaults: direct path fully off, return busses at the brief's specif
         CHECK (processor.apvts.getParameter (id)->getValue() < 0.5f);
     }
 }
+
+//==============================================================================
+// Brief section 6.10c - AU/AUv3 automation-lane ordering contract.
+//
+// JUCE orders AU/AUv3 parameters using the version hint. Every parameter that
+// shipped up to v0.4.0 was constructed with hint 1; if the v0.5.0 newcomers
+// reused hint 1 they could interleave with that set and silently remap
+// automation lanes in existing Logic/GarageBand sessions - a break no DSP test
+// can see. The rule is that parameters added after a release take the hint of
+// the generation that introduced them (v0.5.0 -> 2).
+TEST_CASE ("Version hints: v0.5.0 newcomers are hint 2, pre-existing parameters stay hint 1", "[parameters][versionhint]")
+{
+    MiserereAudioProcessor processor;
+
+    const auto hintOf = [&] (const char* id)
+    {
+        auto* param = dynamic_cast<juce::HostedAudioProcessorParameter*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+        return param->getVersionHint();
+    };
+
+    for (const auto* id : { ParamIDs::slapWobble, ParamIDs::slapAge })
+    {
+        INFO ("v0.5.0 parameter id = " << id);
+        CHECK (hintOf (id) == 2);
+    }
+
+    // Spot-check across every section, including the SLAP bus the newcomers
+    // joined - these must not have been dragged forward.
+    for (const auto* id : { ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass, ParamIDs::link,
+                            ParamIDs::directEqDrive, ParamIDs::directSatDrive,
+                            ParamIDs::crushInput, ParamIDs::crushRatio,
+                            ParamIDs::sandPeakRed, ParamIDs::sandEmphasis,
+                            ParamIDs::spreadDetune,
+                            ParamIDs::slapTime, ParamIDs::slapTone, ParamIDs::slapLevel, ParamIDs::slapMute })
+    {
+        INFO ("pre-v0.5.0 parameter id = " << id);
+        CHECK (hintOf (id) == 1);
+    }
+}
+
+TEST_CASE ("v0.5.0 parameters: ranges and neutral defaults per brief section 4", "[parameters][versionhint]")
+{
+    MiserereAudioProcessor processor;
+
+    for (const auto* id : { ParamIDs::slapWobble, ParamIDs::slapAge })
+    {
+        auto* param = dynamic_cast<juce::RangedAudioParameter*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+
+        INFO ("parameter id = " << id);
+        CHECK (param->getNormalisableRange().start == Catch::Approx (0.0f));
+        CHECK (param->getNormalisableRange().end == Catch::Approx (100.0f));
+
+        // Binding compatibility promise: both default to exact neutral, so
+        // the modulation and noise layers are structurally off and a v0.4.0
+        // session renders unchanged.
+        CHECK (param->convertFrom0to1 (param->getDefaultValue()) == Catch::Approx (0.0f).margin (1.0e-6));
+    }
+}
