@@ -19,6 +19,26 @@ void ConsoleEq::prepare (const juce::dsp::ProcessSpec& spec)
     midPeak.prepare (spec);
     highShelf.prepare (spec);
 
+    const auto numChannels = static_cast<size_t> (spec.numChannels);
+    oddStages.assign (numChannels, {});
+    ironStages.assign (numChannels, {});
+    ironStates.assign (numChannels, {});
+
+    // Iron integrator/differentiator (bilinear one-pole pair, see class
+    // comment): H_int(s) = w_ref / (s + w_leak), normalised to unity gain at
+    // the 100 Hz reference so drive numbers stay comparable across stages;
+    // the differentiator is its exact trapezoidal inverse (with a damped
+    // alternating pole).
+    {
+        const auto twoOverT = 2.0 * sampleRate;
+        const auto wLeak = juce::MathConstants<double>::twoPi * static_cast<double> (ironIntegratorPoleHz);
+        const auto wRef = juce::MathConstants<double>::twoPi * static_cast<double> (ironReferenceHz);
+
+        ironIntegratorPole = (twoOverT - wLeak) / (twoOverT + wLeak);
+        ironIntegratorGain = wRef / (twoOverT + wLeak);
+        ironDifferentiatorGain = 1.0 / wRef;
+    }
+
     hpfFreqSmoothed.reset (sampleRate, smoothingTimeSeconds);
     hpfFreqSmoothed.setCurrentAndTargetValue (lastHpfFreqHz);
     lowFreqSmoothed.reset (sampleRate, smoothingTimeSeconds);
@@ -49,8 +69,7 @@ void ConsoleEq::prepare (const juce::dsp::ProcessSpec& spec)
         juce::dsp::IIR::ArrayCoefficients<float>::makePeakFilter (
             sampleRate, clampBelowNyquist (lastMidFreqHz, sampleRate), midQ, juce::Decibels::decibelsToGain (lastMidGainDb)));
     msrr::applyBiquadCoefficients (*highShelf.state,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (
-            sampleRate, highShelfFreqHz, highShelfQ, juce::Decibels::decibelsToGain (lastHighGainDb)));
+        msrr::makeMatchedHighShelf (sampleRate, highShelfFreqHz, highShelfQ, lastHighGainDb));
 }
 
 void ConsoleEq::reset()
@@ -60,6 +79,15 @@ void ConsoleEq::reset()
     lowShelf.reset();
     midPeak.reset();
     highShelf.reset();
+
+    for (auto& stage : oddStages)
+        stage.reset();
+
+    for (auto& stage : ironStages)
+        stage.reset();
+
+    for (auto& state : ironStates)
+        state = {};
 }
 
 void ConsoleEq::setHpfFreqHz (float newFrequencyHz) noexcept
@@ -154,31 +182,68 @@ void ConsoleEq::process (juce::dsp::AudioBlock<float>& block) noexcept
 
     if (std::abs (highGainDb) > neutralGainEpsilonDb)
     {
+        // Matched (decramped) 12 kHz shelf - see class comment (brief F2).
         msrr::applyBiquadCoefficients (*highShelf.state,
-            juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (sampleRate, highShelfFreqHz, highShelfQ, juce::Decibels::decibelsToGain (highGainDb)));
+            msrr::makeMatchedHighShelf (sampleRate, highShelfFreqHz, highShelfQ, highGainDb));
         highShelf.process (context);
     }
 
-    // Drive: 0 dB (parameter minimum) is a bit-exact bypass (see TapeSat.h
-    // for the identical rationale - this reuses the same TapeSaturator
-    // curve for the odd/3rd-leaning part, plus a small fixed even-harmonic
-    // add-on for the "near-equal 2nd+3rd" transformer-style character).
+    // Drive: 0 dB (parameter minimum) is a bit-exact structural bypass.
+    // Odd 3rd-leaning term = shared TapeSaturator curve via residual-form
+    // ADAA (brief F1); even/LF term = flux-domain iron chain (brief F8) as
+    // a parallel ADAA-residual delta - see class comment.
     if (driveDb > 0.0f)
     {
         const auto driveGainLinear = juce::Decibels::decibelsToGain (driveDb);
         const auto compensation = TapeSaturator::compensationForDrive (driveGainLinear);
 
-        for (size_t channel = 0; channel < numChannels; ++channel)
+        // Iron drive FACTOR (not a gain): dF = g - 1 -> 0 as drive -> 0 dB,
+        // so the normalised iron curve
+        //   s = (tanh(dF*u + b) - tanh(b)) / (dF * sech^2(b))
+        // collapses to the exact identity s = u and the iron delta
+        // (differentiated ADAA residual) vanishes - the drive -> 0 null is
+        // structural (brief F8 / test 6.6).
+        const auto ironDriveFactor = juce::jmax (1.0e-4f, driveGainLinear - 1.0f);
+        const auto sechSqB = 1.0f - std::tanh (ironDcBias) * std::tanh (ironDcBias);
+        const auto ironScale = 1.0f / (ironDriveFactor * sechSqB);
+
+        const auto channelsToProcess = juce::jmin (numChannels, oddStages.size());
+
+        for (size_t channel = 0; channel < channelsToProcess; ++channel)
         {
+            auto& odd = oddStages[channel];
+            auto& iron = ironStages[channel];
+            auto& state = ironStates[channel];
+
+            odd.prepareBlock (driveGainLinear, compensation);
+            iron.prepareBlock (ironDriveFactor, ironDcBias, ironScale);
+
             auto* data = block.getChannelPointer (channel);
 
             for (size_t sample = 0; sample < numSamples; ++sample)
             {
                 const auto x = data[sample];
-                const auto driven = x * driveGainLinear;
-                const auto odd = TapeSaturator::processSample (x, driveGainLinear, compensation);
-                const auto even = evenHarmonicAmount * driven * driven * (x >= 0.0f ? 1.0f : -1.0f);
-                data[sample] = odd + even * compensation;
+
+                // Flux estimate (leaky trapezoidal integrator, double).
+                const auto xd = static_cast<double> (x);
+                state.integrator = ironIntegratorPole * state.integrator
+                                   + ironIntegratorGain * (xd + state.integratorInput);
+                state.integratorInput = xd;
+
+                // Iron residual (ADAA, parallel-delta rule) ...
+                const auto fluxResidual = static_cast<double> (iron.processResidual (static_cast<float> (state.integrator)));
+
+                // ... differentiated back to the voltage domain (exact
+                // trapezoidal inverse of the integrator, damped Nyquist
+                // pole - see class comment).
+                const auto diffOut = ((2.0 * sampleRate + juce::MathConstants<double>::twoPi * ironIntegratorPoleHz) * fluxResidual
+                                      - (2.0 * sampleRate - juce::MathConstants<double>::twoPi * ironIntegratorPoleHz) * state.diffPrevIn)
+                                         * ironDifferentiatorGain
+                                     - ironDifferentiatorDamping * state.diffPrevOut;
+                state.diffPrevIn = fluxResidual;
+                state.diffPrevOut = diffOut;
+
+                data[sample] = odd.processSample (x) + ironAmount * static_cast<float> (diffOut);
             }
         }
     }
