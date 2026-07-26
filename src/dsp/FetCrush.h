@@ -133,6 +133,18 @@ public:
         float loopGain;      // cell-side gain on vC (under-damping control)
         float epsScale;      // epsilon-term scale (2nd-harmonic "hair")
         float linGainDb;     // linear-region gain trim (ABI: +0.7 dB)
+        float rectRailVolts; // rectifier-driver rail (vRect clamp). Numbered
+                             // ratios: a finite rail keeps burst transients
+                             // RC-limited (panel-spec attack times). ABI: a
+                             // much higher effective rail - the all-buttons
+                             // bias overdrives the rectifier driver, which is
+                             // what slams the cap PAST its loop equilibrium
+                             // and produces the documented transient
+                             // overshoot/plateau (research section 3.2).
+        float chargeScale;   // charge-path speed-up. ABI presses every ratio
+                             // resistor in parallel -> lower effective
+                             // charge-path resistance -> under-damped attack
+                             // (the "loopGain x1.3 + under-damping" state).
     };
 
     static BiasTuple biasTupleFor (Ratio r, Style s) noexcept;
@@ -151,8 +163,18 @@ private:
     static constexpr float attackMinUs = 20.0f;
     static constexpr float releaseMaxMs = 1100.0f;
     static constexpr float releaseMinMs = 50.0f;
-    static constexpr float attackRcCalibration = 0.55f;
-    static constexpr float releaseRcCalibration = 0.62f;
+    static constexpr float attackRcCalibration = 3.0f;
+    static constexpr float releaseRcCalibration = 0.40f;
+
+    // The charge path shares a leg with the release network, so the
+    // effective attack time constant carries a release-dial term:
+    //   tau_att = attackRcCalibration*Ratt*C + kappa*Rrel*C
+    // This is what makes the release dial measurably change the effective
+    // attack time (Gerat/Eichas Fig. 6.20, research-fet-comp-1176.md
+    // section 1.2.3) with the measured sign: FASTER release => FASTER
+    // effective attack. Documented calibration term, tuned against the
+    // coupling test in tests/FetCrushTests.cpp.
+    static constexpr float releaseAttackCouplingKappa = 0.0015f;
 
     static constexpr float tupleCrossfadeSeconds = 0.010f;
 
@@ -166,12 +188,13 @@ private:
     // Per-channel loop state (index 0 shared when linked).
     std::vector<double> capVoltage;      // vC in [0, |Vp|)
     std::vector<float> feedbackSample;   // y[n-1] per channel
-    std::vector<float> lfSaturationState;
+    std::vector<float> lfSaturationState;  // first LF-extract pole
+    std::vector<float> lfSaturationState2; // second LF-extract pole
     std::vector<msrr::adaa::TanhStage> lfColourStages;
 
     // Smoothed (10 ms crossfaded) tuple state.
-    BiasTuple currentTuple { -24.0f, 2.4f, 1.56f, 2.0f, 0.7f };
-    BiasTuple targetTuple { -24.0f, 2.4f, 1.56f, 2.0f, 0.7f };
+    BiasTuple currentTuple { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f, 60.0f, 8.0f };
+    BiasTuple targetTuple { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f, 60.0f, 8.0f };
     int tupleFadeSamplesLeft = 0;
     int tupleFadeLengthSamples = 1;
 

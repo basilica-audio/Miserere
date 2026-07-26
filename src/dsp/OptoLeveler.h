@@ -101,7 +101,7 @@ private:
     // tests/OptoLevelerTests.cpp).
     static constexpr float maxSidechainGainDb = 40.0f;
     static constexpr double driverRailVolts = 2.5;      // 6AQ5 soft-clip rail
-    static constexpr double compressDriverGain = 1.0;   // Compress tuple
+    static constexpr double compressDriverGain = 0.9;   // Compress tuple
     static constexpr double limitDriverGain = 3.2;      // Limit tuple (higher loop gain)
     static constexpr double elCoefficientB0 = 1.0e17;   // B0 * kOpt (absorbed)
     static constexpr double elKneeB = 17.0;             // EL turn-on sharpness

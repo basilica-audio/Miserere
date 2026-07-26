@@ -112,8 +112,9 @@ TEST_CASE ("Opto: two-stage release - fast 50% stage, seconds-scale tail, tau2/t
     opto.setPeakReductionProportion (0.5f);
     opto.prepare (makeTestSpec (1));
 
-    // Calibrated drive: ~10 dB settled GR at peakRed 50%.
-    const auto grAtStop = driveToSettledGr (opto, 0.05f, 1.0);
+    // Calibrated drive: ~10 dB settled GR at peakRed 50% (-20 dBFS input;
+    // the golden static curve puts this at ~9.4 dB GR).
+    const auto grAtStop = driveToSettledGr (opto, 0.1f, 1.0);
     REQUIRE (grAtStop > 6.0f);
     REQUIRE (grAtStop < 16.0f);
 
@@ -160,7 +161,7 @@ TEST_CASE ("Opto: release memory - longer GR history releases measurably slower"
         opto.setPeakReductionProportion (0.5f);
         opto.prepare (makeTestSpec (1));
 
-        const auto grAtStop = driveToSettledGr (opto, 0.05f, holdSeconds);
+        const auto grAtStop = driveToSettledGr (opto, 0.1f, holdSeconds);
         REQUIRE (grAtStop > 5.0f);
 
         const auto trace = releaseTrace (opto, 6.0);
@@ -177,9 +178,12 @@ TEST_CASE ("Opto: release memory - longer GR history releases measurably slower"
 //==============================================================================
 // 6.5c - GR ripple: 50 Hz at ~15 dB GR shows H3 enrichment >= 6 dB vs a
 // rectified-detector control build (asserts the unrectified EL detection is
-// alive). The control replaces the audio-rate EL drive with a 10 ms
-// RC-rectified envelope of the same sidechain signal ahead of the same EL
-// law + carrier cell - the classic detector the T4B does NOT have.
+// alive). The control replaces the audio-rate EL drive with the research
+// file's Tier-B "vactrol heuristic" smoothing network (rectifier + switched
+// one-pole, 2 ms toward more GR / 60 ms toward less -
+// research-opto-la2a.md section 4) ahead of the same EL law + carrier cell -
+// the classic detector the T4B does NOT have. Tier B's documented tradeoff
+// is exactly "loses GR ripple harmonics (LF thickening)".
 
 TEST_CASE ("Opto: 50 Hz GR ripple - H3 enrichment >= 6 dB vs rectified-detector control", "[dsp][opto][ripple]")
 {
@@ -208,7 +212,8 @@ TEST_CASE ("Opto: 50 Hz GR ripple - H3 enrichment >= 6 dB vs rectified-detector 
                           / juce::jmax (1.0e-12, TestHelpers::fftBinMagnitude (buffer, 0, settle, total - settle, testSampleRate, f0));
 
     // Control build: same divider/cell, but the EL panel is lit by a
-    // RECTIFIED+SMOOTHED envelope (10 ms RC) of the sidechain signal, so
+    // RECTIFIED+SMOOTHED envelope (switched one-pole: 2 ms attack, 60 ms
+    // release - the Tier-B smoothing network) of the sidechain signal, so
     // the 2f light ripple is gone. Gain-matched to the same mean GR by
     // scaling the sidechain drive.
     const auto renderControlH3 = [&] (double sidechainScale, float& meanGrOut)
@@ -221,7 +226,8 @@ TEST_CASE ("Opto: 50 Hz GR ripple - H3 enrichment >= 6 dB vs rectified-detector 
         auto* data = control.getWritePointer (0);
 
         const double T = 1.0 / testSampleRate;
-        const auto rcCoeff = std::exp (-T / 0.010);
+        const auto attackCoeff = std::exp (-T / 0.002);
+        const auto releaseCoeff = std::exp (-T / 0.060);
         double envelope = 0.0;
         double feedback = 0.0;
         double grSum = 0.0;
@@ -239,7 +245,9 @@ TEST_CASE ("Opto: 50 Hz GR ripple - H3 enrichment >= 6 dB vs rectified-detector 
         for (int n = 0; n < total; ++n)
         {
             const auto driven = rail * std::tanh (sidechainGain * feedback / rail);
-            envelope = rcCoeff * envelope + (1.0 - rcCoeff) * std::abs (driven); // RECTIFIER + RC
+            const auto rectified = std::abs (driven); // RECTIFIER
+            const auto envCoeff = rectified > envelope ? attackCoeff : releaseCoeff;
+            envelope = envCoeff * envelope + (1.0 - envCoeff) * rectified;
             const auto g = juce::jmin (msrr::electroluminance (envelope, b0el, kneeB), 20.0);
 
             const auto rCell = cell.processSample (g, T);

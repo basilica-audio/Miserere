@@ -10,18 +10,21 @@ FetCrush::BiasTuple FetCrush::biasTupleFor (Ratio r, Style s) noexcept
     // (loopGain x1.3 vs 20:1), doubled epsilon "hair". Gentle is a single
     // damped tuple that ignores the ratio selector (its existing semantic).
     if (s == Style::gentle)
-        return { -32.0f, 0.35f, 0.5f, 0.5f, 0.0f };
+        return { -32.0f, 0.35f, 0.5f, 0.5f, 0.0f, 10.0f, 1.0f };
 
     switch (r)
     {
-        case Ratio::r4:   return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f };
-        case Ratio::r8:   return { -28.0f, 1.4f, 1.0f, 1.2f, 0.0f };
-        case Ratio::r12:  return { -26.0f, 1.9f, 1.1f, 1.5f, 0.0f };
-        case Ratio::r20:  return { -24.0f, 2.4f, 1.2f, 1.7f, 0.0f };
-        case Ratio::rAll: return { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f }; // loopGain = 1.2*1.3, eps x2
+        case Ratio::r4:   return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f };
+        case Ratio::r8:   return { -28.0f, 1.4f, 1.0f, 1.2f, 0.0f, 10.0f, 1.0f };
+        case Ratio::r12:  return { -26.0f, 1.9f, 1.1f, 1.5f, 0.0f, 10.0f, 1.0f };
+        case Ratio::r20:  return { -24.0f, 2.4f, 1.2f, 1.7f, 0.0f, 10.0f, 1.0f };
+        // ALL: loopGain = 1.2*1.3, eps x2, rectifier rail overdriven + all
+        // ratio resistors in parallel (chargeScale) -> the under-damped
+        // slam/overshoot/plateau bias state.
+        case Ratio::rAll: return { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f, 60.0f, 8.0f };
     }
 
-    return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f };
+    return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f };
 }
 
 void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)
@@ -32,6 +35,7 @@ void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)
     capVoltage.assign (numChannels, 0.0);
     feedbackSample.assign (numChannels, 0.0f);
     lfSaturationState.assign (numChannels, 0.0f);
+    lfSaturationState2.assign (numChannels, 0.0f);
     lfColourStages.assign (numChannels, {});
 
     tupleFadeLengthSamples = juce::jmax (1, static_cast<int> (tupleCrossfadeSeconds * sampleRate));
@@ -48,6 +52,7 @@ void FetCrush::reset()
     std::fill (capVoltage.begin(), capVoltage.end(), 0.0);
     std::fill (feedbackSample.begin(), feedbackSample.end(), 0.0f);
     std::fill (lfSaturationState.begin(), lfSaturationState.end(), 0.0f);
+    std::fill (lfSaturationState2.begin(), lfSaturationState2.end(), 0.0f);
 
     for (auto& stage : lfColourStages)
         stage.reset();
@@ -98,8 +103,11 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
     // Exponential (per-branch analytic) Euler coefficients for the
     // single-cap two-path RC (research section 3.2). The calibration
     // factors map the panel-spec dial bracketing onto MEASURED 63%/37%
-    // times (the feedback loop lengthens raw RC responses).
-    const auto attackTau = static_cast<double> (attackUs) * 1.0e-6 * static_cast<double> (attackRcCalibration);
+    // times (the feedback loop lengthens raw RC responses); the attack
+    // path carries the shared-leg release term (see
+    // releaseAttackCouplingKappa in FetCrush.h).
+    const auto attackTau = static_cast<double> (attackUs) * 1.0e-6 * static_cast<double> (attackRcCalibration)
+                           + static_cast<double> (releaseMs) * 1.0e-3 * static_cast<double> (releaseAttackCouplingKappa);
     const auto releaseTau = static_cast<double> (releaseMs) * 1.0e-3 * static_cast<double> (releaseRcCalibration);
     const auto aA = 1.0 - std::exp (-1.0 / (attackTau * sampleRate));
     const auto aR = 1.0 - std::exp (-1.0 / (releaseTau * sampleRate));
@@ -119,9 +127,10 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
             capVoltage[channel] = 0.0;
         }
 
-        if (! std::isfinite (lfSaturationState[channel]))
+        if (! std::isfinite (lfSaturationState[channel]) || ! std::isfinite (lfSaturationState2[channel]))
         {
             lfSaturationState[channel] = 0.0f;
+            lfSaturationState2[channel] = 0.0f;
             lfColourStages[channel].reset();
         }
     }
@@ -139,6 +148,8 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
     auto loopGain = static_cast<double> (currentTuple.loopGain);
     auto eps = epsilonBase * static_cast<double> (currentTuple.epsScale);
     auto linGain = static_cast<double> (juce::Decibels::decibelsToGain (currentTuple.linGainDb));
+    auto rectRail = static_cast<double> (currentTuple.rectRailVolts);
+    auto aACharge = std::min (1.0, aA * static_cast<double> (currentTuple.chargeScale));
 
     const auto numSidechains = linked ? std::min<size_t> (1, numChannelsToProcess) : numChannelsToProcess;
 
@@ -154,6 +165,8 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
             currentTuple.loopGain += t * (targetTuple.loopGain - currentTuple.loopGain);
             currentTuple.epsScale += t * (targetTuple.epsScale - currentTuple.epsScale);
             currentTuple.linGainDb += t * (targetTuple.linGainDb - currentTuple.linGainDb);
+            currentTuple.rectRailVolts += t * (targetTuple.rectRailVolts - currentTuple.rectRailVolts);
+            currentTuple.chargeScale += t * (targetTuple.chargeScale - currentTuple.chargeScale);
             --tupleFadeSamplesLeft;
 
             thresholdLinear = std::pow (10.0, static_cast<double> (currentTuple.thresholdDb) / 20.0);
@@ -162,6 +175,8 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
             loopGain = static_cast<double> (currentTuple.loopGain);
             eps = epsilonBase * static_cast<double> (currentTuple.epsScale);
             linGain = static_cast<double> (juce::Decibels::decibelsToGain (currentTuple.linGainDb));
+            rectRail = static_cast<double> (currentTuple.rectRailVolts);
+            aACharge = std::min (1.0, aA * static_cast<double> (currentTuple.chargeScale));
         }
 
         // --- Sidechain pass: one shared cap when linked (driven by the
@@ -198,10 +213,19 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
 
             for (int iteration = 0; iteration < 2; ++iteration)
             {
-                const auto vRect = std::max (0.0, kSc * yEstimateAbs - vth);
+                // Rectifier with driver rail (per-tuple: the ABI bias state
+                // overdrives the rail - see BiasTuple::rectRailVolts).
+                const auto vRect = std::min (std::max (0.0, kSc * yEstimateAbs - vth), rectRail);
 
+                // Diode-gated charge path + ALWAYS-ON release leak: R_rel
+                // sits permanently across the cap in the hardware - the
+                // leak participates during attack, which is half of the
+                // attack/release coupling (the other half is the shared-leg
+                // kappa term in the attack tau).
                 vC = capVoltage[sc];
-                vC = vRect > vC ? vC + aA * (vRect - vC) : vC * (1.0 - aR);
+                if (vRect > vC)
+                    vC += aACharge * (vRect - vC);
+                vC -= aR * vC;
                 vC = juce::jlimit (0.0, pinchOffVolts * 0.999, vC);
 
                 vCell = juce::jlimit (0.0, pinchOffVolts * 0.999, loopGain * vC);
@@ -211,9 +235,12 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
                 const auto gds = vCell / (rOnOhm * pinchOffVolts);
                 baseGain = 1.0 / (1.0 + seriesOhm * gds);
 
-                // Residual square-law mismatch for the output estimate.
+                // Residual square-law mismatch for the output estimate. The
+                // vCell/|Vp| factor scales the mismatch with control-voltage
+                // excursion from the trimmed bias point - the measured
+                // "hair grows with GR depth" behaviour (research 1.2.4).
                 const auto vds = baseGain * drivenForSidechain;
-                const auto gainWithHair = baseGain * (1.0 - eps * vds / (2.0 * (vCell + pinchOffVolts)));
+                const auto gainWithHair = baseGain * (1.0 - eps * vds * (vCell / pinchOffVolts) / (2.0 * (vCell + pinchOffVolts)));
 
                 yEstimateAbs = std::abs (gainWithHair * drivenForSidechain * linGain * static_cast<double> (outputTrimLinear));
             }
@@ -247,7 +274,7 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
             }
 
             const auto vds = baseGain * driven;
-            const auto gain = baseGain * (1.0 - eps * vds / (2.0 * (vCell + pinchOffVolts)));
+            const auto gain = baseGain * (1.0 - eps * vds * (vCell / pinchOffVolts) / (2.0 * (vCell + pinchOffVolts)));
 
             const auto y = gain * driven * linGain * static_cast<double> (outputTrimLinear);
 
@@ -263,9 +290,15 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
                 ? colourAmount
                 : juce::jlimit (0.0f, 1.0f, channelReductionDb / harmonicReferenceGrDb);
 
+            // Second-order LF extract (two cascaded one-poles at 150 Hz):
+            // steep enough that the transformer delta stays genuinely
+            // LF-selective (the residual curve is cubic in its input, so
+            // midband leak-through falls ~18 dB/oct in practice).
             auto& lfState = lfSaturationState[channel];
+            auto& lfState2 = lfSaturationState2[channel];
             lfState += lfAlpha * (attenuated - lfState);
-            attenuated += channelColour * lfColourStages[channel].processResidual (lfState);
+            lfState2 += lfAlpha * (lfState - lfState2);
+            attenuated += channelColour * lfColourStages[channel].processResidual (lfState2);
 
             data[sample] = attenuated;
             feedbackSample[channel] = static_cast<float> (y);

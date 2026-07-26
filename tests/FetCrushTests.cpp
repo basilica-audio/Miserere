@@ -148,38 +148,60 @@ TEST_CASE ("Crush: ratio creep - instantaneous ratio at 10 ms < ratio at 1 s", "
 // 6.4b - attack/release coupling: the effective attack time at a FIXED
 // attack dial strictly decreases across 3 increasing (faster) release-dial
 // positions - the one-cap/two-pot signature that kills
-// independent-time-constant implementations. Measured as "GR reached a
-// fixed 2 ms after burst onset" (more GR after 2 ms == faster effective
-// attack).
+// independent-time-constant implementations (Gerat/Eichas Fig. 6.20, the
+// servo-rig system-identification definition: time to reach 63 % of the
+// setting's OWN settled GR, sample-accurate).
 
 TEST_CASE ("Crush: release dial changes the effective attack (shared-cap coupling)", "[dsp][crush][feedback][coupling]")
 {
-    const auto grAfter2ms = [] (float releaseStep)
+    const auto effectiveAttackSeconds = [] (float releaseStep)
     {
+        const auto configure = [releaseStep] (FetCrush& crush, int blockSize)
+        {
+            crush.setRatio (FetCrush::Ratio::r20);
+            crush.setStyle (FetCrush::Style::allButtons);
+            crush.setInputDriveDb (16.0f); // ~+20 dB over the r20 threshold (driven)
+            crush.setAttackStep (2.0f);    // fixed, slow-ish
+            crush.setReleaseStep (releaseStep);
+            crush.prepare (makeTestSpec (1, blockSize));
+        };
+
+        // Own settled GR first.
+        FetCrush settledCrush;
+        configure (settledCrush, 480);
+        (void) measureGrTrace (settledCrush, 1000.0, 0.5f, static_cast<int> (1.0 * testSampleRate / 480), 480);
+        const auto settled = settledCrush.getCurrentGainReductionDb();
+        REQUIRE (settled > 6.0f);
+
+        // Sample-accurate time to 63 % of it.
         FetCrush crush;
-        crush.setRatio (FetCrush::Ratio::r20);
-        crush.setStyle (FetCrush::Style::allButtons);
-        crush.setInputDriveDb (16.0f); // ~+20 dB over the r20 threshold at -0.5 dBFS peak... (driven)
-        crush.setAttackStep (2.0f);    // fixed, slow-ish
-        crush.setReleaseStep (releaseStep);
+        configure (crush, 1);
+        const auto target = 0.63f * settled;
+        const auto maxSamples = static_cast<int> (0.02 * testSampleRate);
 
-        constexpr int blockSize = 32;
-        crush.prepare (makeTestSpec (1, blockSize));
+        for (int n = 0; n < maxSamples; ++n)
+        {
+            juce::AudioBuffer<float> buffer (1, 1);
+            TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.5f, n);
+            juce::dsp::AudioBlock<float> block (buffer);
+            crush.process (block);
 
-        const auto blocksFor2ms = static_cast<int> (0.002 * testSampleRate / blockSize);
-        const auto trace = measureGrTrace (crush, 1000.0, 0.5f, blocksFor2ms, blockSize);
-        return trace.back();
+            if (crush.getCurrentGainReductionDb() >= target)
+                return (n + 1) / testSampleRate;
+        }
+
+        return static_cast<double> (maxSamples) / testSampleRate;
     };
 
-    const auto slowRelease = grAfter2ms (2.0f);
-    const auto midRelease = grAfter2ms (4.0f);
-    const auto fastRelease = grAfter2ms (6.0f);
+    const auto slowRelease = effectiveAttackSeconds (1.0f);
+    const auto midRelease = effectiveAttackSeconds (4.0f);
+    const auto fastRelease = effectiveAttackSeconds (7.0f);
 
-    INFO ("GR after 2 ms: release 2 -> " << slowRelease << " dB, release 4 -> " << midRelease
-          << " dB, release 6 -> " << fastRelease << " dB");
+    INFO ("effective attack t63: release 1 -> " << slowRelease * 1e6 << " us, release 4 -> "
+          << midRelease * 1e6 << " us, release 7 -> " << fastRelease * 1e6 << " us");
 
-    CHECK (midRelease > slowRelease);
-    CHECK (fastRelease > midRelease);
+    CHECK (midRelease < slowRelease);
+    CHECK (fastRelease < midRelease);
 }
 
 //==============================================================================
@@ -253,7 +275,10 @@ TEST_CASE ("Crush: ABI step response overshoots >= 1 dB GR beyond the settled va
     FetCrush crush;
     crush.setRatio (FetCrush::Ratio::rAll);
     crush.setStyle (FetCrush::Style::allButtons);
-    crush.setInputDriveDb (18.0f);
+    // Drive chosen so the settled GR sits below the ~30 dB divider ceiling
+    // - the overshoot needs headroom above the settled value to be
+    // observable at all.
+    crush.setInputDriveDb (12.0f);
     crush.setAttackStep (6.0f);
     crush.setReleaseStep (6.0f);
 
@@ -546,7 +571,8 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
 
 namespace
 {
-    double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude)
+    double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude,
+                              float releaseStep = 7.0f)
     {
         constexpr int blockSize = 24000;
         constexpr int settle = 12000;
@@ -556,7 +582,7 @@ namespace
         crush.setStyle (FetCrush::Style::allButtons);
         crush.setInputDriveDb (driveDb);
         crush.setAttackStep (7.0f);
-        crush.setReleaseStep (7.0f);
+        crush.setReleaseStep (releaseStep);
         crush.prepare (makeTestSpec (1, blockSize));
 
         juce::AudioBuffer<float> buffer (1, blockSize);
@@ -580,8 +606,10 @@ TEST_CASE ("Crush: colour stays negligible when the signal never reaches gain re
 
 TEST_CASE ("Crush: colour grows with gain reduction (eps-term ~ GR depth)", "[dsp][crush][colour]")
 {
-    const auto lowGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 6.0f, 1000.0, 0.3f);
-    const auto highGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f);
+    // Slowest release isolates the eps-term from sidechain-ripple
+    // distortion (which scales the OPPOSITE way with overdrive).
+    const auto lowGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 6.0f, 1000.0, 0.3f, 1.0f);
+    const auto highGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f, 1.0f);
 
     INFO ("low-GR THD = " << lowGrThd << ", high-GR THD = " << highGrThd);
     CHECK (highGrThd > lowGrThd);

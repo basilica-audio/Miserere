@@ -58,9 +58,9 @@ namespace msrr
         double rLightOhm = 2.0;    // fully-lit resistance floor
         double rDarkOhm = 10.0e6;  // dark resistance ceiling
         double qTau = 0.977;       // trap density constant
-        double nuN = 3.5e5;        // electron recombination rate (T4B-recalibrated; paper: 1.79e8)
-        double nuP = 0.55;         // hole detrap rate (T4B-recalibrated; paper: 1.35e2)
-        double etaP = 0.02;        // hole generation fraction (deviation - see header comment)
+        double nuN = 1.2e6;        // electron recombination rate (T4B-recalibrated; paper: 1.79e8)
+        double nuP = 1.23;         // hole detrap rate (T4B-recalibrated; paper: 1.35e2)
+        double etaP = 4.0e-4;      // hole generation fraction (deviation - see header comment)
         double qMax = 10.0;        // abuse clamp on either charge state
     };
 
