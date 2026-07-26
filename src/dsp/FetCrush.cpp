@@ -1,66 +1,27 @@
 #include "FetCrush.h"
 
-namespace
+FetCrush::BiasTuple FetCrush::biasTupleFor (Ratio r, Style s) noexcept
 {
-    // Standard soft-knee gain-reduction formula (Giannoulis, Massberg &
-    // Reiss, "Digital Dynamic Range Compressor Design", JAES 2012):
-    // returns the (non-negative) dB of reduction for a level `overDb` dB
-    // above threshold, a given ratio and knee width.
-    float softKneeReductionDb (float overDb, float ratio, float kneeDb) noexcept
-    {
-        const auto ratioFactor = 1.0f - (1.0f / ratio);
+    // Discrete per-ratio bias tuples (research-fet-comp-1176.md sections
+    // 1.1/3.2): each button shifts BOTH the rectifier bias (threshold) and
+    // the loop steepness - higher ratio => higher threshold, steeper loop,
+    // narrower emergent knee. ALL is a genuine fifth tuple, never an
+    // interpolation: slight linear-region gain, under-damped loop
+    // (loopGain x1.3 vs 20:1), doubled epsilon "hair". Gentle is a single
+    // damped tuple that ignores the ratio selector (its existing semantic).
+    if (s == Style::gentle)
+        return { -32.0f, 0.35f, 0.5f, 0.5f, 0.0f };
 
-        if (2.0f * overDb < -kneeDb)
-            return 0.0f;
-
-        if (2.0f * std::abs (overDb) <= kneeDb)
-        {
-            const auto x = overDb + kneeDb * 0.5f;
-            return ratioFactor * (x * x) / (2.0f * kneeDb);
-        }
-
-        return ratioFactor * overDb;
-    }
-}
-
-FetCrush::RatioPoint FetCrush::ratioPointFor (Ratio r) noexcept
-{
     switch (r)
     {
-        case Ratio::r4:   return { 4.0f, -30.0f, 6.0f };
-        case Ratio::r8:   return { 8.0f, -28.0f, 4.0f };
-        case Ratio::r12:  return { 12.0f, -26.0f, 2.0f };
-        case Ratio::r20:  return { 20.0f, -24.0f, 1.0f };
-        case Ratio::rAll: return { 16.0f, -24.0f, 0.5f }; // "steep" first segment; see staticCurveReductionDb
+        case Ratio::r4:   return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f };
+        case Ratio::r8:   return { -28.0f, 1.4f, 1.0f, 1.2f, 0.0f };
+        case Ratio::r12:  return { -26.0f, 1.9f, 1.1f, 1.5f, 0.0f };
+        case Ratio::r20:  return { -24.0f, 2.4f, 1.2f, 1.7f, 0.0f };
+        case Ratio::rAll: return { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f }; // loopGain = 1.2*1.3, eps x2
     }
 
-    return { 4.0f, -30.0f, 6.0f };
-}
-
-float FetCrush::staticCurveReductionDb (float levelDb, Ratio r, Style s) noexcept
-{
-    if (s == Style::gentle)
-        return softKneeReductionDb (levelDb - (-32.0f), 2.0f, 8.0f); // fixed 2:1, softest knee (brief: "Gentle (2:1...)")
-
-    const auto point = ratioPointFor (r);
-    const auto overDb = levelDb - point.thresholdDb;
-
-    if (r != Ratio::rAll)
-        return softKneeReductionDb (overDb, point.ratio, point.kneeDb);
-
-    // ALL mode: a steep ratio (16:1) just above the knee, giving back to a
-    // softer ratio (10:1) above a fixed overshoot "kink" - a deliberately
-    // non-monotonic gain-reduction slope (the plateau's "kink" the brief
-    // specifies), continuous at the kink itself.
-    constexpr float giveBackRatio = 10.0f;
-    constexpr float kinkDb = 6.0f;
-
-    if (overDb <= kinkDb)
-        return softKneeReductionDb (overDb, point.ratio, point.kneeDb);
-
-    const auto reductionAtKink = softKneeReductionDb (kinkDb, point.ratio, point.kneeDb);
-    const auto giveBackFactor = 1.0f - (1.0f / giveBackRatio);
-    return reductionAtKink + (overDb - kinkDb) * giveBackFactor;
+    return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f };
 }
 
 void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)
@@ -68,19 +29,50 @@ void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)
     sampleRate = spec.sampleRate > 0.0 ? spec.sampleRate : 44100.0;
 
     const auto numChannels = static_cast<size_t> (spec.numChannels);
-    envelopeState.assign (numChannels, 0.0f);
-    compressionDuration.assign (numChannels, 0.0f);
+    capVoltage.assign (numChannels, 0.0);
+    feedbackSample.assign (numChannels, 0.0f);
     lfSaturationState.assign (numChannels, 0.0f);
+    lfColourStages.assign (numChannels, {});
+
+    tupleFadeLengthSamples = juce::jmax (1, static_cast<int> (tupleCrossfadeSeconds * sampleRate));
+
+    // Snap the tuple (no crossfade across a prepare).
+    currentTuple = targetTuple = biasTupleFor (ratio, style);
+    tupleFadeSamplesLeft = 0;
 
     reset();
 }
 
 void FetCrush::reset()
 {
-    std::fill (envelopeState.begin(), envelopeState.end(), 0.0f);
-    std::fill (compressionDuration.begin(), compressionDuration.end(), 0.0f);
+    std::fill (capVoltage.begin(), capVoltage.end(), 0.0);
+    std::fill (feedbackSample.begin(), feedbackSample.end(), 0.0f);
     std::fill (lfSaturationState.begin(), lfSaturationState.end(), 0.0f);
+
+    for (auto& stage : lfColourStages)
+        stage.reset();
+
     currentGainReductionDb = 0.0f;
+}
+
+void FetCrush::setRatio (Ratio newRatio) noexcept
+{
+    if (ratio == newRatio)
+        return;
+
+    ratio = newRatio;
+    targetTuple = biasTupleFor (ratio, style);
+    tupleFadeSamplesLeft = tupleFadeLengthSamples; // 10 ms tuple crossfade (research 3.2)
+}
+
+void FetCrush::setStyle (Style newStyle) noexcept
+{
+    if (style == newStyle)
+        return;
+
+    style = newStyle;
+    targetTuple = biasTupleFor (ratio, style);
+    tupleFadeSamplesLeft = tupleFadeLengthSamples;
 }
 
 void FetCrush::setAttackStep (float step1to7) noexcept
@@ -103,97 +95,182 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
     if (numSamples == 0 || numChannels == 0)
         return;
 
-    // ALL mode adds a short extra attack lag so the initial transient
-    // overshoots through before the limiter clamps down hard (the
-    // all-buttons "snap" - see class comment).
-    const auto effectiveAttackUs = attackUs + (style == Style::allButtons && ratio == Ratio::rAll ? allButtonsAttackLagMs * 1000.0f : 0.0f);
-    const auto attackCoeff = std::exp (-1.0 / (static_cast<double> (effectiveAttackUs) * 1.0e-6 * sampleRate));
+    // Exponential (per-branch analytic) Euler coefficients for the
+    // single-cap two-path RC (research section 3.2). The calibration
+    // factors map the panel-spec dial bracketing onto MEASURED 63%/37%
+    // times (the feedback loop lengthens raw RC responses).
+    const auto attackTau = static_cast<double> (attackUs) * 1.0e-6 * static_cast<double> (attackRcCalibration);
+    const auto releaseTau = static_cast<double> (releaseMs) * 1.0e-3 * static_cast<double> (releaseRcCalibration);
+    const auto aA = 1.0 - std::exp (-1.0 / (attackTau * sampleRate));
+    const auto aR = 1.0 - std::exp (-1.0 / (releaseTau * sampleRate));
 
-    const auto fastReleaseCoeff = std::exp (-1.0 / (static_cast<double> (releaseMs) * 0.001 * sampleRate));
-    const auto slowReleaseMs = releaseMs * slowReleaseMultiplier;
-    const auto slowReleaseCoeff = std::exp (-1.0 / (static_cast<double> (slowReleaseMs) * 0.001 * sampleRate));
-
-    const auto durationRiseCoeff = std::exp (-1.0 / (durationRiseTauSeconds * sampleRate));
-    const auto durationFallCoeff = std::exp (-1.0 / (durationFallTauSeconds * sampleRate));
-
-    // One-pole LF-band tracker for the transformer-style colour term - see
-    // class comment. Fixed cutoff, so the rise coefficient only depends on
-    // sample rate.
     const auto lfAlpha = static_cast<float> (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * lfSaturationCutoffHz / sampleRate));
+
+    const auto numChannelsToProcess = juce::jmin (numChannels, capVoltage.size());
+
+    // Non-finite abuse re-seed (brief 6.12): clamp/clear poisoned loop
+    // state at block rate; the engine's output sanitiser covers the sum
+    // within the poisoned block.
+    for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+    {
+        if (! std::isfinite (feedbackSample[channel]) || ! std::isfinite (static_cast<float> (capVoltage[channel])))
+        {
+            feedbackSample[channel] = 0.0f;
+            capVoltage[channel] = 0.0;
+        }
+
+        if (! std::isfinite (lfSaturationState[channel]))
+        {
+            lfSaturationState[channel] = 0.0f;
+            lfColourStages[channel].reset();
+        }
+    }
+
+    for (auto& stage : lfColourStages)
+        stage.prepareBlock (lfColourDrive, 1.0f / lfColourDrive); // k = 1 -> pure residual delta
 
     float peakGainReductionDb = 0.0f;
 
-    // Linked detection: both channels' envelopes track the combined (max
-    // absolute) signal rather than their own - "dual mono" is the default
-    // (unlinked); Link makes both channels react identically to a
-    // hard-panned burst (guarantee 10).
-    const auto numChannelsToProcess = juce::jmin (numChannels, envelopeState.size());
+    // Derived loop constants - recomputed only while the 10 ms tuple
+    // crossfade is running (they involve pow/exp).
+    auto thresholdLinear = std::pow (10.0, static_cast<double> (currentTuple.thresholdDb) / 20.0);
+    auto vth = static_cast<double> (currentTuple.vthScale);
+    auto kSc = vth / thresholdLinear;
+    auto loopGain = static_cast<double> (currentTuple.loopGain);
+    auto eps = epsilonBase * static_cast<double> (currentTuple.epsScale);
+    auto linGain = static_cast<double> (juce::Decibels::decibelsToGain (currentTuple.linGainDb));
+
+    const auto numSidechains = linked ? std::min<size_t> (1, numChannelsToProcess) : numChannelsToProcess;
 
     for (size_t sample = 0; sample < numSamples; ++sample)
     {
-        float combinedDriven = 0.0f;
-
-        if (linked)
+        // Advance the 10 ms tuple crossfade (research 3.2: crossfade the
+        // tuple, let the loop swallow the transient).
+        if (tupleFadeSamplesLeft > 0)
         {
-            for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
-                combinedDriven = juce::jmax (combinedDriven, std::abs (block.getChannelPointer (channel)[sample] * inputDriveLinear));
+            const auto t = 1.0f / static_cast<float> (tupleFadeSamplesLeft);
+            currentTuple.thresholdDb += t * (targetTuple.thresholdDb - currentTuple.thresholdDb);
+            currentTuple.vthScale += t * (targetTuple.vthScale - currentTuple.vthScale);
+            currentTuple.loopGain += t * (targetTuple.loopGain - currentTuple.loopGain);
+            currentTuple.epsScale += t * (targetTuple.epsScale - currentTuple.epsScale);
+            currentTuple.linGainDb += t * (targetTuple.linGainDb - currentTuple.linGainDb);
+            --tupleFadeSamplesLeft;
+
+            thresholdLinear = std::pow (10.0, static_cast<double> (currentTuple.thresholdDb) / 20.0);
+            vth = static_cast<double> (currentTuple.vthScale);
+            kSc = vth / thresholdLinear;
+            loopGain = static_cast<double> (currentTuple.loopGain);
+            eps = epsilonBase * static_cast<double> (currentTuple.epsScale);
+            linGain = static_cast<double> (juce::Decibels::decibelsToGain (currentTuple.linGainDb));
         }
 
+        // --- Sidechain pass: one shared cap when linked (driven by the
+        // max-abs of the pair), one per channel otherwise. Two fixed-point
+        // iterations of the loop per sample (research 3.2): evaluate the
+        // cell from the previous output estimate, recompute the rectifier
+        // from the CURRENT estimate, re-evaluate.
+        double sharedVCell = 0.0;
+        double sharedBaseGain = 1.0;
+
+        for (size_t sc = 0; sc < numSidechains; ++sc)
+        {
+            double yEstimateAbs = 0.0;
+            double drivenForSidechain = 0.0;
+
+            if (linked)
+            {
+                for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+                {
+                    yEstimateAbs = std::max (yEstimateAbs, std::abs (static_cast<double> (feedbackSample[channel])));
+                    drivenForSidechain = std::max (drivenForSidechain,
+                        std::abs (static_cast<double> (block.getChannelPointer (channel)[sample]) * static_cast<double> (inputDriveLinear)));
+                }
+            }
+            else
+            {
+                yEstimateAbs = std::abs (static_cast<double> (feedbackSample[sc]));
+                drivenForSidechain = static_cast<double> (block.getChannelPointer (sc)[sample]) * static_cast<double> (inputDriveLinear);
+            }
+
+            double vC = capVoltage[sc];
+            double vCell = 0.0;
+            double baseGain = 1.0;
+
+            for (int iteration = 0; iteration < 2; ++iteration)
+            {
+                const auto vRect = std::max (0.0, kSc * yEstimateAbs - vth);
+
+                vC = capVoltage[sc];
+                vC = vRect > vC ? vC + aA * (vRect - vC) : vC * (1.0 - aR);
+                vC = juce::jlimit (0.0, pinchOffVolts * 0.999, vC);
+
+                vCell = juce::jlimit (0.0, pinchOffVolts * 0.999, loopGain * vC);
+
+                // FET divider in conductance form: gds ~ vCell (see class
+                // comment), G = 1/(1 + Rs*gds) - exact unity at idle.
+                const auto gds = vCell / (rOnOhm * pinchOffVolts);
+                baseGain = 1.0 / (1.0 + seriesOhm * gds);
+
+                // Residual square-law mismatch for the output estimate.
+                const auto vds = baseGain * drivenForSidechain;
+                const auto gainWithHair = baseGain * (1.0 - eps * vds / (2.0 * (vCell + pinchOffVolts)));
+
+                yEstimateAbs = std::abs (gainWithHair * drivenForSidechain * linGain * static_cast<double> (outputTrimLinear));
+            }
+
+            capVoltage[sc] = vC;
+            sharedVCell = vCell;
+            sharedBaseGain = baseGain;
+        }
+
+        const auto reductionDb = static_cast<float> (20.0 * std::log10 (1.0 + seriesOhm * sharedVCell / (rOnOhm * pinchOffVolts)));
+        const auto colourAmount = juce::jlimit (0.0f, 1.0f, reductionDb / harmonicReferenceGrDb);
+
+        // --- Audio pass: apply the (per-sidechain) divider gain with the
+        // per-channel epsilon "hair" (signal-dependent), then the GR-gated
+        // LF transformer colour delta.
         for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
         {
             auto* data = block.getChannelPointer (channel);
-            auto& envelope = envelopeState[channel];
-            auto& duration = compressionDuration[channel];
+            const auto driven = static_cast<double> (data[sample]) * static_cast<double> (inputDriveLinear);
 
-            const auto drivenSample = data[sample] * inputDriveLinear;
-            const auto detectorSample = linked ? combinedDriven : std::abs (drivenSample);
+            // For unlinked stereo the per-channel sidechain already ran
+            // above (sc == channel); recover its cell values.
+            double vCell = sharedVCell;
+            double baseGain = sharedBaseGain;
 
-            const auto rectified = detectorSample * detectorSample;
-            const auto durationNow = juce::jlimit (0.0f, 1.0f, duration);
-            const auto releaseCoeff = static_cast<float> (fastReleaseCoeff + durationNow * (slowReleaseCoeff - fastReleaseCoeff));
-            const auto coeff = rectified > envelope ? attackCoeff : releaseCoeff;
-            envelope = static_cast<float> (coeff * envelope + (1.0 - coeff) * rectified);
+            if (! linked)
+            {
+                vCell = juce::jlimit (0.0, pinchOffVolts * 0.999, loopGain * capVoltage[channel]);
+                const auto gds = vCell / (rOnOhm * pinchOffVolts);
+                baseGain = 1.0 / (1.0 + seriesOhm * gds);
+            }
 
-            const auto envelopeDb = juce::Decibels::gainToDecibels (std::sqrt (juce::jmax (envelope, 1.0e-12f)), -120.0f);
-            const auto reductionDb = juce::jmax (0.0f, staticCurveReductionDb (envelopeDb, ratio, style));
+            const auto vds = baseGain * driven;
+            const auto gain = baseGain * (1.0 - eps * vds / (2.0 * (vCell + pinchOffVolts)));
 
-            // Compression-duration integrator: rises while actively
-            // reducing gain, decays otherwise - governs the fast/slow
-            // release blend above (dual-rate, program-dependent release).
-            const auto durationTarget = reductionDb > durationGrEpsilonDb ? 1.0f : 0.0f;
-            const auto durationCoeff = durationTarget > duration ? durationRiseCoeff : durationFallCoeff;
-            duration = static_cast<float> (durationCoeff * duration + (1.0 - durationCoeff) * durationTarget);
+            const auto y = gain * driven * linGain * static_cast<double> (outputTrimLinear);
 
-            const auto gainFactor = juce::Decibels::decibelsToGain (-reductionDb);
-            const auto attenuated = drivenSample * gainFactor;
+            auto attenuated = static_cast<float> (y);
 
-            // Program-dependent colour (M2 voicing pass) - see class
-            // comment. Both terms are gated by `colourAmount`, which tracks
-            // how hard the limiter is presently working (0 for a clean,
-            // unreduced signal; full strength at harmonicReferenceGrDb of
-            // GR), so a quiet passage stays clean and the colour only
-            // appears under real limiting.
-            const auto colourAmount = juce::jlimit (0.0f, 1.0f, reductionDb / harmonicReferenceGrDb);
+            // GR-gated LF transformer colour: one-pole 150 Hz extract into
+            // the fixed tanh curve; the delta IS the ADAA residual scaled
+            // by the GR gate (brief F1 parallel-delta rule).
+            const auto channelReductionDb = linked
+                ? reductionDb
+                : static_cast<float> (20.0 * std::log10 (1.0 + seriesOhm * vCell / (rOnOhm * pinchOffVolts)));
+            const auto channelColour = linked
+                ? colourAmount
+                : juce::jlimit (0.0f, 1.0f, channelReductionDb / harmonicReferenceGrDb);
 
-            // Transformer-style LF-selective saturation: track the LF band
-            // with a one-pole lowpass, drive only that band into tanh, and
-            // add back just the (gated) distortion delta - broadband
-            // content above the cutoff is untouched.
             auto& lfState = lfSaturationState[channel];
             lfState += lfAlpha * (attenuated - lfState);
-            const auto lfDriveLinear = 1.0f + colourAmount * lfHarmonicMaxDriveExtra;
-            const auto lfSaturated = std::tanh (lfDriveLinear * lfState) / lfDriveLinear;
-            const auto lfColourDelta = (lfSaturated - lfState) * colourAmount;
+            attenuated += channelColour * lfColourStages[channel].processResidual (lfState);
 
-            // Class-A-style asymmetric term: an even-harmonic addition
-            // (x * |x|, an odd function so it still respects overall
-            // polarity) that biases the two half-cycles differently, the
-            // signature of a single-ended gain stage.
-            const auto asymmetricDelta = asymmetryMaxAmount * colourAmount * attenuated * std::abs (attenuated);
+            data[sample] = attenuated;
+            feedbackSample[channel] = static_cast<float> (y);
 
-            data[sample] = (attenuated + lfColourDelta + asymmetricDelta) * outputTrimLinear;
-
-            peakGainReductionDb = juce::jmax (peakGainReductionDb, reductionDb);
+            peakGainReductionDb = juce::jmax (peakGainReductionDb, channelReductionDb);
         }
     }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AdaaSaturator.h"
+
 #include <juce_dsp/juce_dsp.h>
 
 #include <vector>
@@ -8,55 +10,74 @@
 // actually is - by input drive into a fixed per-ratio threshold, never by a
 // threshold knob (docs/design-brief.md).
 //
-// Modelled behaviours (see docs/research-notes.md for the sourced findings
-// this is derived from):
+// v0.5.0 "Circuit Engines" (brief F3): the previous feed-forward detector
+// (static soft-knee table + hand-built dual-rate release blend + duration
+// integrator) is REPLACED by the real feedback-FET circuit structure
+// (research-fet-comp-1176.md sections 2.1-2.3, 3.2):
 //
-// - **Input-drive paradigm**: no threshold parameter. `crush_input` (0-48 dB)
-//   drives both the audio path and the detector into a FIXED per-ratio
-//   threshold/knee table - threshold rises and the knee hardens as ratio
-//   increases (right down to the near-hard-knee ALL setting).
-// - **Inverted-taper ballistics**: `crush_attack`/`crush_release` are 1-7
-//   dials where a HIGHER number is FASTER (800->20 us attack, 1100->50 ms
-//   release), matching the hardware convention.
-// - **Dual-rate, program-dependent release**: a fast release after brief
-//   transients, a slow release (several times longer) after sustained
-//   high-RMS compression, blended by a compression-duration integrator (a
-//   slow one-pole tracking how long the signal has been actively
-//   compressing) rather than a fixed switch - the classic "pumping forward"
-//   feel.
-// - **ALL-mode plateau**: the all-buttons setting is modelled as a steep
-//   ratio just above the knee that gives back to a softer ratio above a
-//   fixed overshoot "kink" (a genuinely non-monotonic gain-reduction slope,
-//   not a single fixed ratio), plus a short extra attack lag that lets the
-//   initial transient overshoot through before the limiter clamps down
-//   hard - the "snap" the brief specifies.
-// - **Gentle style**: a fixed, softer 2:1 voicing (the later-era rear-bus
-//   flavour) that ignores the ratio/ALL selector entirely.
-// - **Program-dependent colour (M2 voicing pass, docs/research-notes.md's
-//   "FET" section + design-brief.md's CRUSH "Color" line)**: the detector
-//   ripple that already falls out of the gain computer is kept untouched;
-//   ADDED on top is a small, level-dependent pair of stages gated by the
-//   CURRENT gain reduction (so a quiet, uncompressed signal stays clean and
-//   the colour only appears "at moderate-to-heavy GR", matching the
-//   hardware's own "less than 0.5% THD... at 1.1 seconds release" framing):
-//   a class-A-style asymmetric term (a small even-harmonic addition that
-//   biases compression differently between half-cycles, the classic
-//   single-ended-stage signature) and a transformer-style LF-selective soft
-//   saturation (a one-pole low-band extract driven into tanh - a real output
-//   transformer's core saturates more at low frequencies for a given level,
-//   so this stage's contribution is concentrated below its cutoff rather
-//   than broadband). Both terms are engineering approximations tuned to stay
-//   subtle at typical operating points, not a measured match to any specific
-//   hardware unit's bench THD curve (see docs/research-notes.md's framing).
+//   x -> inputDrive (crush_input, 0-48 dB) -> FET divider gain G(vC, x)
+//     -> makeup/trim -> y
+//          ^ feedback: y[n-1] -> full-wave rectifier -> single-cap RC -> vC
 //
-// Minimum-phase/causal: a pure per-sample gain multiply (plus the two small
-// memoryless/one-pole colour terms above) with no lookahead,
-// zero added latency - keeps the CRUSH bus sample-aligned with the Direct
-// path per the suite's phase discipline (docs/adr/0003).
+// - **Single-cap two-path sidechain ODE** (attack pot in the charge path,
+//   release pot in the discharge path, C = 0.22 uF normalised):
 //
-// Stereo detection defaults to UNLINKED (independent per-channel envelopes -
-// "dual mono is key", design brief); setLinked(true) combines both channels'
-// detector input into a single shared envelope.
+//     vRect = max(0, kSc*|y[n-1]| - Vth(ratio))
+//     vC   += aA*(vRect - vC)   if vRect > vC     (charge through attack pot)
+//     vC   *= (1 - aR)          otherwise         (discharge through release pot)
+//
+//   One cap, two pots: attack and release interact through the same state
+//   variable - the release dial measurably changes the effective attack
+//   (the Eichas/Gerat servo-rig finding), and program-dependent release +
+//   ratio creep emerge from the feedback drive of the rectifier. No
+//   hand-built dual-rate blend remains.
+// - **Two fixed-point iterations per sample** (evaluate cell -> recompute
+//   vRect from the current output estimate -> re-evaluate cell), branch-
+//   free: the research file's explicit 1x prescription that makes the 20 us
+//   attack genuinely act sub-sample at 44.1/48 k instead of an impossible
+//   one-pole coefficient.
+// - **FET cell with imperfect square-law cancellation**: the FET is a
+//   voltage-controlled resistor shunting the signal node,
+//   conductance ~ vCell (Shichman-Hodges triode region after the
+//   half-drain-to-gate cancellation), G = 1/(1 + Rs*gds(vCell)), plus the
+//   residual-mismatch epsilon term
+//     G *= 1 - eps*vds/(2*(vCell - Vp))
+//   whose 2nd-harmonic "hair" grows with GR depth. This replaces the old
+//   0.15*x*|x| colour term.
+//
+//   NOTE on the cell formula: the brief's pseudo-code writes
+//   rds = rOn/(1 - vC*invVp); with the ODE's vC being a POSITIVE control
+//   voltage in [0, |Vp|), that literal expression caps the divider swing at
+//   ~6 dB. The physical reading (v_gs = Vp + vC rising from pinch-off
+//   toward 0, r_ds = rOn/(1 - v_gs/Vp) = rOn*|Vp|/vC, i.e. conductance
+//   proportional to vC - exactly the research file's Shichman-Hodges
+//   g_ds ~ (v_gs - Vp)) restores the specified >= 30 dB GR range and
+//   exact unity at idle; implemented in conductance form (no division by
+//   zero at vC = 0). Flagged as a documented correction in the PR.
+// - **Ratio buttons = discrete bias tuples** {Vth, kSc, vBias, epsScale,
+//   loopGain} for 4:1/8:1/12:1/20:1; ALL is a genuine FIFTH tuple (never an
+//   interpolation): slight linear-region gain (+0.7 dB), loopGain x1.3
+//   (deliberate under-damping -> transient overshoot/plateau), epsScale x2.
+//   Ratio switches crossfade the tuple over 10 ms. `crush_style` selects
+//   between the ABI tuple set and a damped ("Gentle", fixed soft 2:1-class
+//   voicing that ignores the ratio selector) tuple, preserving its existing
+//   semantic.
+// - **Inverted-taper ballistics** kept: crush_attack/crush_release are 1-7
+//   dials, HIGHER = FASTER, panel-spec bracketing Ratt*C in [20 us, 800 us],
+//   Rrel*C in [50 ms, 1100 ms] (the dial->RC mapping carries a calibration
+//   factor so the MEASURED 63%/37% times match the panel spec - the
+//   feedback loop lengthens raw RC times, see tests/FetCrushTests.cpp).
+// - **GR-gated LF transformer colour** kept (150 Hz one-pole extract into a
+//   tanh), now routed through residual-form ADAA per brief F1's
+//   parallel-delta rule (the delta IS the ADAA residual).
+//
+// Minimum-phase/causal: per-sample gain multiplies with no lookahead, zero
+// added latency - keeps the CRUSH bus sample-aligned with the Direct path
+// per the suite's phase discipline (docs/adr/0003).
+//
+// Stereo detection defaults to UNLINKED (independent per-channel sidechains
+// - "dual mono is key", design brief); setLinked(true) shares one vC driven
+// by the max-abs of both channels' feedback samples.
 class FetCrush
 {
 public:
@@ -84,11 +105,11 @@ public:
     // comment) - 0 dB multiplies by exactly 1.0f.
     void setInputDriveDb (float newDriveDb) noexcept { inputDriveLinear = juce::Decibels::decibelsToGain (juce::jmax (0.0f, newDriveDb)); }
 
-    void setRatio (Ratio newRatio) noexcept { ratio = newRatio; }
-    void setStyle (Style newStyle) noexcept { style = newStyle; }
+    void setRatio (Ratio newRatio) noexcept;
+    void setStyle (Style newStyle) noexcept;
 
     // 1-7, inverted taper (7 = fastest): 800 -> 20 us attack, 1100 -> 50 ms
-    // (63%-recovery, one-pole definition) base/fast release.
+    // release (panel-spec bracketing of the RC paths).
     void setAttackStep (float step1to7) noexcept;
     void setReleaseStep (float step1to7) noexcept;
 
@@ -104,47 +125,55 @@ public:
     // channels in the last processed block - exposed for metering/tests.
     float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb; }
 
-    struct RatioPoint
+    // The discrete per-ratio bias tuple (exposed for tests).
+    struct BiasTuple
     {
-        float ratio;
-        float thresholdDb;
-        float kneeDb;
+        float thresholdDb;   // rectifier bias threshold, dBFS on the driven signal
+        float vthScale;      // Vth in cap-voltage units (kSc = vthScale/10^(thresholdDb/20))
+        float loopGain;      // cell-side gain on vC (under-damping control)
+        float epsScale;      // epsilon-term scale (2nd-harmonic "hair")
+        float linGainDb;     // linear-region gain trim (ABI: +0.7 dB)
     };
 
-    // Exposed for direct unit testing of the static curve (per-ratio table
-    // + ALL-mode plateau/give-back) independent of the envelope dynamics.
-    static RatioPoint ratioPointFor (Ratio r) noexcept;
-    static float staticCurveReductionDb (float levelDb, Ratio r, Style s) noexcept;
+    static BiasTuple biasTupleFor (Ratio r, Style s) noexcept;
 
 private:
-    static constexpr double smoothingTimeSeconds = 0.05;
+    // FET cell constants (calibration constants, tuned in tests):
+    // rOn = 400 ohm, Vp = -3 V class, Rs chosen so max GR ~ 30 dB.
+    static constexpr double rOnOhm = 400.0;
+    static constexpr double pinchOffVolts = 3.0;    // |Vp|
+    static constexpr double seriesOhm = 12250.0;    // Rs -> 20*log10(1 + Rs/rOn) ~ 30 dB
+    static constexpr double epsilonBase = 0.1;      // eps (epsScale multiplies)
 
+    // Sidechain RC bracketing (research section 2.2, C = 0.22 uF
+    // normalised) + measurement calibration factors (see class comment).
     static constexpr float attackMaxUs = 800.0f;
     static constexpr float attackMinUs = 20.0f;
     static constexpr float releaseMaxMs = 1100.0f;
     static constexpr float releaseMinMs = 50.0f;
+    static constexpr float attackRcCalibration = 0.55f;
+    static constexpr float releaseRcCalibration = 0.62f;
 
-    static constexpr float slowReleaseMultiplier = 6.0f;
-    static constexpr double durationRiseTauSeconds = 1.0;  // how quickly "sustained compression" is recognised
-    static constexpr double durationFallTauSeconds = 0.3;
-    static constexpr float durationGrEpsilonDb = 0.1f;
+    static constexpr float tupleCrossfadeSeconds = 0.010f;
 
-    static constexpr float allButtonsAttackLagMs = 4.0f; // extra attack lag -> transient overshoot ("snap")
-
-    // Program-dependent colour (see class comment): both terms are gated by
-    // how hard the limiter is currently working, reaching full strength at
-    // `harmonicReferenceGrDb` of gain reduction and staying at ~0 for a
-    // clean, unreduced signal.
+    // GR-gated LF transformer colour (kept from the M2 voicing pass).
     static constexpr float harmonicReferenceGrDb = 12.0f;
-    static constexpr float lfSaturationCutoffHz = 150.0f;   // transformer-style LF corner
-    static constexpr float lfHarmonicMaxDriveExtra = 3.0f;  // extra tanh drive added to the LF band at full colour amount
-    static constexpr float asymmetryMaxAmount = 0.15f;      // class-A even-harmonic term's peak coefficient
+    static constexpr float lfSaturationCutoffHz = 150.0f;
+    static constexpr float lfColourDrive = 4.0f;    // fixed curve drive; the GR gate scales the residual
 
     double sampleRate = 44100.0;
 
-    std::vector<float> envelopeState;         // per-channel squared-signal envelope (detector)
-    std::vector<float> compressionDuration;   // per-channel 0..1 "how long have we been compressing" integrator
-    std::vector<float> lfSaturationState;     // per-channel one-pole LF-band tracker for the transformer-style colour term
+    // Per-channel loop state (index 0 shared when linked).
+    std::vector<double> capVoltage;      // vC in [0, |Vp|)
+    std::vector<float> feedbackSample;   // y[n-1] per channel
+    std::vector<float> lfSaturationState;
+    std::vector<msrr::adaa::TanhStage> lfColourStages;
+
+    // Smoothed (10 ms crossfaded) tuple state.
+    BiasTuple currentTuple { -24.0f, 2.4f, 1.56f, 2.0f, 0.7f };
+    BiasTuple targetTuple { -24.0f, 2.4f, 1.56f, 2.0f, 0.7f };
+    int tupleFadeSamplesLeft = 0;
+    int tupleFadeLengthSamples = 1;
 
     float inputDriveLinear = 1.0f;
     float outputTrimLinear = 1.0f;
