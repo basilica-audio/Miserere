@@ -33,7 +33,7 @@
 //
 //     u = leakyIntegrate(x, pole 3 Hz)         // flux ~ integral(v dt) -> 1/f level scaling
 //     s = ADAA_tanh(drive*u + phi_dc)/drive    // DC premagnetisation -> 2nd harmonic
-//     y = pairedDifferentiator(s)              // trapezoidal inverse of the integrator
+//     y = pairedDifferentiator(s)              // EXACT inverse of the integrator
 //
 //   Because flux ~ V/f, HD3 rises automatically toward LF (the measured
 //   transformer signature - no hand-drawn frequency weighting), and the DC
@@ -42,8 +42,10 @@
 //   nonlinear part is applied per the F1 parallel-delta rule: the iron
 //   contribution IS the ADAA residual, differentiated - the linear signal
 //   never passes through the integrator/differentiator pair, so drive -> 0
-//   nulls exactly by construction. Double state for the integrator (LF
-//   error accumulation).
+//   nulls exactly by construction (measured: -105 dBFS against the EQ-only
+//   render at a near-zero Drive setting). Double state for the integrator
+//   (LF error accumulation); see prepare() for why the pair is discretised
+//   impulse-invariant rather than trapezoidally.
 // - The odd (3rd-leaning) term keeps the shared TapeSaturator curve, now
 //   rendered via residual-form ADAA1 (brief F1, AdaaSaturator.h).
 //
@@ -92,20 +94,13 @@ private:
     // F8 iron-term calibration (see class comment + tests/ConsoleEqTests):
     // - integrator pole 3 Hz, unity-gain reference 100 Hz (flux is
     //   normalised so drive numbers stay comparable to the odd term's),
-    // - phi_dc tuned so H2/H3 lands in the SoS 1073 measurement window
-    //   [0.5, 1.1] at hot drive,
+    // - phi_dc tuned so H2/H3 lands on the SoS 1073 measurement anchor
+    //   (measured 0.88 at +24 dB drive; test window [0.5, 1.1]),
     // - ironAmount scales the differentiated residual into the mix.
     static constexpr float ironIntegratorPoleHz = 3.0f;
     static constexpr float ironReferenceHz = 100.0f;
-    static constexpr float ironDcBias = 0.16f;
+    static constexpr float ironDcBias = 0.33f;
     static constexpr float ironAmount = 0.5f;
-    // Damping on the differentiator's alternating (Nyquist) pole: the exact
-    // trapezoidal inverse has a marginal pole at z = -1 which would let
-    // float rounding accumulate as an alternating-sign drift; 0.98 damps it
-    // while leaving the LF-concentrated iron residual untouched. The
-    // inverse-pairing null is unaffected because the linear signal never
-    // enters the pair (parallel-delta rule - see class comment).
-    static constexpr double ironDifferentiatorDamping = 0.98;
 
     static constexpr float neutralGainEpsilonDb = 1.0e-3f;
 
@@ -125,10 +120,8 @@ private:
 
     struct IronState
     {
-        double integrator = 0.0;     // leaky trapezoidal flux integrator (double - LF accumulation)
-        double integratorInput = 0.0; // previous input sample (trapezoid)
-        double diffPrevIn = 0.0;      // differentiator: previous residual sample
-        double diffPrevOut = 0.0;     // differentiator: previous output (damped alternating pole)
+        double integrator = 0.0;  // leaky flux integrator (double - LF accumulation)
+        double diffPrevIn = 0.0;  // differentiator: previous residual sample
     };
 
     std::vector<IronState> ironStates;
@@ -142,9 +135,12 @@ private:
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> driveDbSmoothed;
 
     // Iron integrator/differentiator coefficients (recomputed in prepare()).
-    double ironIntegratorPole = 0.0;   // one-pole leak coefficient
-    double ironIntegratorGain = 0.0;   // trapezoidal input gain, normalised to unity at ironReferenceHz
-    double ironDifferentiatorGain = 0.0;
+    // The pair is u[n] = a*u[n-1] + G*x[n] and its EXACT inverse
+    // x[n] = (u[n] - a*u[n-1]) / G - see prepare() for why this
+    // (pole-free) discretisation is used instead of the trapezoidal one.
+    double ironIntegratorPole = 0.0;   // a = exp(-2*pi*f_leak/fs)
+    double ironIntegratorGain = 0.0;   // G, normalised to unity gain at ironReferenceHz
+    double ironDifferentiatorGain = 0.0; // 1/G
 
     bool hpfEnabled = false;
     float lastHpfFreqHz = 80.0f;

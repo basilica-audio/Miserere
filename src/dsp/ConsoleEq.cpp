@@ -24,19 +24,32 @@ void ConsoleEq::prepare (const juce::dsp::ProcessSpec& spec)
     ironStages.assign (numChannels, {});
     ironStates.assign (numChannels, {});
 
-    // Iron integrator/differentiator (bilinear one-pole pair, see class
-    // comment): H_int(s) = w_ref / (s + w_leak), normalised to unity gain at
-    // the 100 Hz reference so drive numbers stay comparable across stages;
-    // the differentiator is its exact trapezoidal inverse (with a damped
-    // alternating pole).
+    // Iron integrator/differentiator pair (see class comment): the analog
+    // prototype is H_int(s) = w_ref / (s + w_leak), a leaky flux integrator
+    // normalised to unity gain at the 100 Hz reference so drive numbers stay
+    // comparable across stages.
+    //
+    // DISCRETISATION (deviation from the brief's "trapezoidal pair", recorded
+    // deliberately): the bilinear integrator's exact inverse is
+    // ((2/T + w_leak) - (2/T - w_leak) z^-1) / (w_ref (1 + z^-1)) - it carries
+    // a pole at z = -1, i.e. an undamped resonance at Nyquist. Damping it
+    // (z = -0.98) both breaks the exactness of the pairing and still leaves
+    // ~34 dB of gain on whatever arithmetic noise reaches it, which is what
+    // put the §6.6 near-zero-drive null at -63 dBFS. The impulse-invariant
+    // one-pole below has an inverse that is a two-tap FIR - pole-free, no
+    // Nyquist resonance, and an EXACT inverse in the linear region, which is
+    // precisely the property the brief's F8 null assertion is about.
     {
-        const auto twoOverT = 2.0 * sampleRate;
         const auto wLeak = juce::MathConstants<double>::twoPi * static_cast<double> (ironIntegratorPoleHz);
-        const auto wRef = juce::MathConstants<double>::twoPi * static_cast<double> (ironReferenceHz);
+        const auto thetaRef = juce::MathConstants<double>::twoPi * static_cast<double> (ironReferenceHz) / sampleRate;
 
-        ironIntegratorPole = (twoOverT - wLeak) / (twoOverT + wLeak);
-        ironIntegratorGain = wRef / (twoOverT + wLeak);
-        ironDifferentiatorGain = 1.0 / wRef;
+        ironIntegratorPole = std::exp (-wLeak / sampleRate);
+
+        // G = |1 - a e^{-j theta_ref}| makes |H_int| == 1 at the reference.
+        const auto re = 1.0 - ironIntegratorPole * std::cos (thetaRef);
+        const auto im = ironIntegratorPole * std::sin (thetaRef);
+        ironIntegratorGain = std::sqrt (re * re + im * im);
+        ironDifferentiatorGain = 1.0 / ironIntegratorGain;
     }
 
     hpfFreqSmoothed.reset (sampleRate, smoothingTimeSeconds);
@@ -224,24 +237,20 @@ void ConsoleEq::process (juce::dsp::AudioBlock<float>& block) noexcept
             {
                 const auto x = data[sample];
 
-                // Flux estimate (leaky trapezoidal integrator, double).
-                const auto xd = static_cast<double> (x);
+                // Flux estimate (leaky one-pole integrator, double - LF
+                // accumulation over long programme material).
                 state.integrator = ironIntegratorPole * state.integrator
-                                   + ironIntegratorGain * (xd + state.integratorInput);
-                state.integratorInput = xd;
+                                   + ironIntegratorGain * static_cast<double> (x);
 
-                // Iron residual (ADAA, parallel-delta rule) ...
-                const auto fluxResidual = static_cast<double> (iron.processResidual (static_cast<float> (state.integrator)));
+                // Iron residual (ADAA, parallel-delta rule) - fed in double,
+                // because rounding the flux state through float here would
+                // reappear as divided-difference noise (see AdaaSaturator.h).
+                const auto fluxResidual = iron.processResidual (state.integrator);
 
-                // ... differentiated back to the voltage domain (exact
-                // trapezoidal inverse of the integrator, damped Nyquist
-                // pole - see class comment).
-                const auto diffOut = ((2.0 * sampleRate + juce::MathConstants<double>::twoPi * ironIntegratorPoleHz) * fluxResidual
-                                      - (2.0 * sampleRate - juce::MathConstants<double>::twoPi * ironIntegratorPoleHz) * state.diffPrevIn)
-                                         * ironDifferentiatorGain
-                                     - ironDifferentiatorDamping * state.diffPrevOut;
+                // ... differentiated back to the voltage domain by the
+                // integrator's exact two-tap inverse (see prepare()).
+                const auto diffOut = (fluxResidual - ironIntegratorPole * state.diffPrevIn) * ironDifferentiatorGain;
                 state.diffPrevIn = fluxResidual;
-                state.diffPrevOut = diffOut;
 
                 data[sample] = odd.processSample (x) + ironAmount * static_cast<float> (diffOut);
             }
