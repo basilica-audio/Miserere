@@ -172,6 +172,8 @@ public:
     void setSlapDelayMs (float ms) noexcept { slap.setDelayMs (ms); }
     void setSlapStereoEnabled (bool enabled) noexcept { slap.setStereoEnabled (enabled); }
     void setSlapToneProportion (float amount01) noexcept { slap.setToneProportion (amount01); }
+    void setSlapWobbleProportion (float amount01) noexcept { slap.setWobbleProportion (amount01); }
+    void setSlapAgeProportion (float amount01) noexcept { slap.setAgeProportion (amount01); }
 
     //==========================================================================
     // Per-bus fader/mute/audition (indices 0..3 = Crush/Sandwich/Spread/
@@ -232,8 +234,45 @@ private:
     std::array<juce::AudioBuffer<float>, numBusses> busBuffers;
 
     // Per-bus fader gains, smoothed. A separate mute/audition-resolved 0/1
-    // multiplier is applied at the sum (unsmoothed - a discrete mix
-    // decision, matching the suite's console semantics elsewhere).
+    // route multiplier is applied at the sum - since v0.5.0 (brief F7) it
+    // ramps linearly over 3 ms instead of stepping, so mute/audition
+    // toggles are click-free. The ramp lands on EXACT 0.0f/1.0f at its end,
+    // preserving the bit-exact contribution invariants (a settled muted bus
+    // contributes exact zeros to the sum).
+    static constexpr double routeRampSeconds = 0.003;
+
+    struct RouteRamp
+    {
+        float current = 1.0f;
+        float target = 1.0f;
+        float step = 1.0f;
+
+        void snapTo (float value) noexcept
+        {
+            current = target = value;
+        }
+
+        void setTarget (float newTarget, float rampStep) noexcept
+        {
+            target = newTarget;
+            step = rampStep;
+        }
+
+        float getNext() noexcept
+        {
+            if (juce::exactlyEqual (current, target))
+                return current;
+
+            current = current < target ? juce::jmin (target, current + step)
+                                       : juce::jmax (target, current - step);
+            return current;
+        }
+    };
+
+    std::array<RouteRamp, numBusses> busRouteRamp;
+    RouteRamp directRouteRamp;
+    float routeRampStep = 1.0f;
+
     std::array<juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>, numBusses> busGainSmoothed;
     std::array<float, numBusses> lastBusLevelDb { -9.0f, -12.0f, -18.0f, -15.0f }; // brief's defaults: Crush/Sandwich/Spread/Slap
     std::array<bool, numBusses> busMuted {};

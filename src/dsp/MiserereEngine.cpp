@@ -56,6 +56,19 @@ void MiserereEngine::prepare (const juce::dsp::ProcessSpec& spec)
         busGainSmoothed[static_cast<size_t> (bus)].setCurrentAndTargetValue (gain);
     }
 
+    // Mute/audition route ramps (brief F7): 3 ms slope; snap to the
+    // CURRENT resolved routing on prepare so a session that opens with a
+    // muted bus is silent from the very first sample (no fade-out ramp).
+    routeRampStep = static_cast<float> (1.0 / juce::jmax (1.0, routeRampSeconds * sampleRate));
+
+    {
+        const bool anyAuditioned = busAuditioned[0] || busAuditioned[1] || busAuditioned[2] || busAuditioned[3];
+        directRouteRamp.snapTo (anyAuditioned ? 0.0f : 1.0f);
+
+        for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
+            busRouteRamp[bus].snapTo ((! busMuted[bus] && (! anyAuditioned || busAuditioned[bus])) ? 1.0f : 0.0f);
+    }
+
     reset();
 }
 
@@ -173,13 +186,16 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     // the sum, and the direct path itself is excluded too (Audition
     // isolates exactly what it names). All bus DSP above ran
     // unconditionally so envelopes/filters/delay lines stay continuous and
-    // unmuting never pops.
+    // unmuting never pops. Since v0.5.0 (brief F7) the resolved 0/1 route
+    // gains ride a 3 ms linear ramp - click-free toggles - and land on
+    // EXACT 0.0f/1.0f so a settled muted bus still contributes exact zeros.
     const bool anyAuditioned = busAuditioned[0] || busAuditioned[1] || busAuditioned[2] || busAuditioned[3];
-    const auto directRouteGain = anyAuditioned ? 0.0f : 1.0f;
 
-    std::array<float, numBusses> routeGain {};
+    directRouteRamp.setTarget (anyAuditioned ? 0.0f : 1.0f, routeRampStep);
+
     for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
-        routeGain[bus] = (! busMuted[bus] && (! anyAuditioned || busAuditioned[bus])) ? 1.0f : 0.0f;
+        busRouteRamp[bus].setTarget ((! busMuted[bus] && (! anyAuditioned || busAuditioned[bus])) ? 1.0f : 0.0f,
+                                     routeRampStep);
 
     // Sum the direct path and the four busses back into the working block
     // (the host's own buffer memory), applying the per-sample-smoothed
@@ -188,10 +204,11 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     for (size_t sample = 0; sample < numSamples; ++sample)
     {
         const auto parallelTrimNow = parallelTrimSmoothed.getNextValue();
+        const auto directRouteGain = directRouteRamp.getNext();
 
         std::array<float, numBusses> faderGain {};
         for (size_t bus = 0; bus < static_cast<size_t> (numBusses); ++bus)
-            faderGain[bus] = busGainSmoothed[bus].getNextValue() * routeGain[bus] * parallelTrimNow;
+            faderGain[bus] = busGainSmoothed[bus].getNextValue() * busRouteRamp[bus].getNext() * parallelTrimNow;
 
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
