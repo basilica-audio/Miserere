@@ -1,28 +1,14 @@
 #include "OptoLeveler.h"
 
-float OptoLeveler::staticCurveOutputDb (float levelDb, bool limitEnabled) noexcept
-{
-    if (levelDb <= breakawayDb)
-        return levelDb;
-
-    const auto kneeRatio = limitEnabled ? limitKneeRatio : normalKneeRatio;
-    const auto kneeCeilingDb = breakawayDb + kneeRegionDb;
-
-    if (levelDb <= kneeCeilingDb)
-        return breakawayDb + (levelDb - breakawayDb) / kneeRatio;
-
-    const auto outputAtCeiling = breakawayDb + kneeRegionDb / kneeRatio;
-    return outputAtCeiling + (levelDb - kneeCeilingDb) / ceilingRatio;
-}
-
 void OptoLeveler::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate > 0.0 ? spec.sampleRate : 44100.0;
 
     const auto numChannels = static_cast<size_t> (spec.numChannels);
-    fastPathState.assign (numChannels, 0.0f);
-    midPathState.assign (numChannels, 0.0f);
-    slowPathState.assign (numChannels, 0.0f);
+
+    cells.assign (numChannels, {});
+    feedbackSample.assign (numChannels, 0.0f);
+    currentGain.assign (numChannels, 1.0f);
 
     emphasisFilters.clear();
     emphasisFilters.resize (numChannels); // Filter<float> is move-only, so resize() rather than assign()
@@ -35,18 +21,26 @@ void OptoLeveler::prepare (const juce::dsp::ProcessSpec& spec)
 
     postAttenuatorCompensation = TapeSaturator::compensationForDrive (postAttenuatorDriveLinear);
 
+    // Dark divider gain: Rcell = Rdark.
+    {
+        const auto rDark = msrr::OptoCellParams().rDarkOhm;
+        const auto rp = rDark * loadOhm / (rDark + loadOhm);
+        darkGain = rp / (seriesOhm + rp);
+    }
+
     reset();
 
     msrr::applyBiquadCoefficients (*emphasisCoefficients,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (
-            sampleRate, emphasisFreqHz, emphasisShelfQ, juce::Decibels::decibelsToGain (-emphasisAmount * emphasisMaxCutDb)));
+        msrr::makeMatchedLowShelf (sampleRate, emphasisFreqHz, emphasisShelfQ, -emphasisAmount * emphasisMaxCutDb));
 }
 
 void OptoLeveler::reset()
 {
-    std::fill (fastPathState.begin(), fastPathState.end(), 0.0f);
-    std::fill (midPathState.begin(), midPathState.end(), 0.0f);
-    std::fill (slowPathState.begin(), slowPathState.end(), 0.0f);
+    for (auto& cell : cells)
+        cell.reset();
+
+    std::fill (feedbackSample.begin(), feedbackSample.end(), 0.0f);
+    std::fill (currentGain.begin(), currentGain.end(), 1.0f);
 
     for (auto& filter : emphasisFilters)
         filter.reset();
@@ -68,92 +62,96 @@ void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
     if (numSamples == 0 || numChannels == 0)
         return;
 
-    // Peak Reduction is an input drive into the fixed static curve (0-18 dB
-    // at 100%), not a threshold - see class comment.
-    constexpr float maxDriveDb = 18.0f;
-    const auto driveDb = juce::jlimit (0.0f, 1.0f, driveSmoothed.skip (static_cast<int> (numSamples))) * maxDriveDb;
-    const auto driveGainLinear = juce::Decibels::decibelsToGain (driveDb);
+    // Peak Reduction -> sidechain gain 0..+40 dB (see class comment).
+    const auto sidechainGainDb = juce::jlimit (0.0f, 1.0f, driveSmoothed.skip (static_cast<int> (numSamples))) * maxSidechainGainDb;
+    const auto sidechainGain = static_cast<double> (juce::Decibels::decibelsToGain (sidechainGainDb));
 
+    // R37 emphasis shelf (matched low shelf, sidechain only - brief F2).
     msrr::applyBiquadCoefficients (*emphasisCoefficients,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (
-            sampleRate, emphasisFreqHz, emphasisShelfQ, juce::Decibels::decibelsToGain (-emphasisAmount * emphasisMaxCutDb)));
+        msrr::makeMatchedLowShelf (sampleRate, emphasisFreqHz, emphasisShelfQ, -emphasisAmount * emphasisMaxCutDb));
 
-    // Each path's own fixed attack/release coefficients - see class
-    // comment (the mid/slow paths' slow attack, not a history accumulator,
-    // is what makes their contribution genuinely depend on how long the
-    // signal has been loud).
-    const auto fastAttackCoeff = std::exp (-1.0 / (fastAttackSeconds * sampleRate));
-    const auto fastReleaseCoeff = std::exp (-1.0 / (fastReleaseSeconds * sampleRate));
-    const auto midAttackCoeff = std::exp (-1.0 / (midAttackSeconds * sampleRate));
-    const auto midReleaseCoeff = std::exp (-1.0 / (midReleaseSeconds * sampleRate));
-    const auto slowAttackCoeff = std::exp (-1.0 / (slowAttackSeconds * sampleRate));
-    const auto slowReleaseCoeff = std::exp (-1.0 / (slowReleaseSeconds * sampleRate));
+    // Limit/Compress tuple: sidechain loop gain + EL drive curve set.
+    const auto driverGain = limitEnabled ? limitDriverGain : compressDriverGain;
+    const auto elKnee = limitEnabled ? limitElKneeB : elKneeB;
 
-    const auto numChannelsToProcess = juce::jmin (numChannels, fastPathState.size());
+    const auto T = 1.0 / sampleRate;
+    const auto numChannelsToProcess = juce::jmin (numChannels, cells.size());
+    const auto numSidechains = linked ? std::min<size_t> (1, numChannelsToProcess) : numChannelsToProcess;
+
+    // Graceful re-seed after non-finite abuse (NaN/Inf feed, brief
+    // section 6.12): carrier states back to dark equilibrium, sidechain
+    // filter and feedback tap cleared. Block-rate check - within the
+    // poisoned block the engine's output sanitiser covers the sum.
+    for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+    {
+        if (! std::isfinite (feedbackSample[channel]))
+        {
+            feedbackSample[channel] = 0.0f;
+            currentGain[channel] = 1.0f;
+            emphasisFilters[juce::jmin (channel, emphasisFilters.size() - 1)].reset();
+            cells[juce::jmin (channel, cells.size() - 1)].reset();
+        }
+    }
+
+    for (auto& cell : cells)
+        cell.sanitise();
 
     float peakGainReductionDb = 0.0f;
 
     for (size_t sample = 0; sample < numSamples; ++sample)
     {
-        // Linked detection: both channels' filters/envelopes are fed the
-        // signed sample of whichever channel currently has the larger
-        // magnitude, so a hard-panned burst produces identical gain
-        // reduction on both channels (guarantee 10). Unlinked (default):
-        // each channel is fed its own sample.
-        float sharedDrivenSample = 0.0f;
-
-        if (linked)
+        // --- Sidechain update(s) from the PREVIOUS output sample(s)
+        // (one-sample feedback tap). Linked: one shared sidechain fed the
+        // max-abs of both channels (the EL law is even, so the magnitude
+        // choice is exact); unlinked: one per channel.
+        for (size_t sc = 0; sc < numSidechains; ++sc)
         {
-            auto largestAbs = -1.0f;
+            float det = 0.0f;
 
-            for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+            if (linked)
             {
-                const auto driven = block.getChannelPointer (channel)[sample] * driveGainLinear;
-
-                if (std::abs (driven) > largestAbs)
-                {
-                    largestAbs = std::abs (driven);
-                    sharedDrivenSample = driven;
-                }
+                for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+                    if (std::abs (feedbackSample[channel]) > std::abs (det))
+                        det = feedbackSample[channel];
             }
+            else
+            {
+                det = feedbackSample[sc];
+            }
+
+            const auto emphasised = static_cast<double> (emphasisFilters[sc].processSample (det));
+
+            // 6AQ5 driver soft clip.
+            const auto driven = driverRailVolts * std::tanh (driverGain * sidechainGain * emphasised / driverRailVolts);
+
+            // EL panel -> photo-generation (audio rate, no rectifier).
+            const auto g = std::min (msrr::electroluminance (driven, elCoefficientB0, elKnee), generationCeiling);
+
+            const auto rCell = cells[sc].processSample (g, T);
+
+            const auto rp = rCell * loadOhm / (rCell + loadOhm);
+            const auto a = rp / (seriesOhm + rp);
+
+            currentGain[sc] = static_cast<float> (a / darkGain);
         }
 
+        // --- Audio path: divider gain a[n-1] -> exempt colour tanh.
         for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
         {
             auto* data = block.getChannelPointer (channel);
-            auto& fastPath = fastPathState[channel];
-            auto& midPath = midPathState[channel];
-            auto& slowPath = slowPathState[channel];
-            auto& filter = emphasisFilters[channel];
 
-            const auto drivenSample = data[sample] * driveGainLinear;
-            const auto detectorInput = linked ? sharedDrivenSample : drivenSample;
-            const auto emphasised = filter.processSample (detectorInput);
-            const auto rectified = emphasised * emphasised;
+            const auto gain = currentGain[linked ? 0 : channel];
+            const auto attenuated = data[sample] * gain;
 
-            fastPath = static_cast<float> ((rectified > fastPath ? fastAttackCoeff : fastReleaseCoeff) * fastPath
-                                            + (1.0 - (rectified > fastPath ? fastAttackCoeff : fastReleaseCoeff)) * rectified);
-            midPath = static_cast<float> ((rectified > midPath ? midAttackCoeff : midReleaseCoeff) * midPath
-                                           + (1.0 - (rectified > midPath ? midAttackCoeff : midReleaseCoeff)) * rectified);
-            slowPath = static_cast<float> ((rectified > slowPath ? slowAttackCoeff : slowReleaseCoeff) * slowPath
-                                            + (1.0 - (rectified > slowPath ? slowAttackCoeff : slowReleaseCoeff)) * rectified);
+            // ADAA-EXEMPT memoryless colour stage (brief F1 exemption
+            // rule - preserves SANDWICH sample alignment).
+            const auto y = TapeSaturator::processSample (attenuated, postAttenuatorDriveLinear, postAttenuatorCompensation);
 
-            // The two-stage (fast-then-slow), history-dependent release
-            // falls straight out of taking the max of three paths whose
-            // mid/slow attacks are themselves slow - see class comment.
-            const auto combined = juce::jmax (fastPath, juce::jmax (midPath, slowPath));
-            const auto levelDb = juce::Decibels::gainToDecibels (std::sqrt (juce::jmax (combined, 1.0e-12f)), -120.0f);
-            const auto outputDb = staticCurveOutputDb (levelDb, limitEnabled);
-            const auto reductionDb = juce::jmax (0.0f, levelDb - outputDb);
+            data[sample] = y;
+            feedbackSample[channel] = y;
 
-            const auto gainFactor = juce::Decibels::decibelsToGain (-reductionDb);
-            const auto attenuated = drivenSample * gainFactor;
-
-            // Gentle, always-on, level-dependent tube/transformer-style
-            // colouration after the (clean) attenuator - see class comment.
-            data[sample] = TapeSaturator::processSample (attenuated, postAttenuatorDriveLinear, postAttenuatorCompensation);
-
-            peakGainReductionDb = juce::jmax (peakGainReductionDb, reductionDb);
+            const auto reductionDb = juce::Decibels::gainToDecibels (juce::jmax (1.0e-6f, gain));
+            peakGainReductionDb = juce::jmax (peakGainReductionDb, -reductionDb);
         }
     }
 

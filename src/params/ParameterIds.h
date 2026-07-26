@@ -125,6 +125,12 @@ namespace ParamIDs
     inline constexpr auto slapStereo = "slap_stereo"; // false (mono return) is the default
     inline constexpr auto slapTone = "slap_tone";     // 0-100%, dark...darker (BBD-style HF loss + soft sat)
 
+    // v0.5.0 tape-transport voicing (wet-bus-only colour controls; both
+    // default to 0 = structurally OFF, so v0.4.0 sessions stay neutral -
+    // see the state-schema versioning in PluginProcessor.cpp).
+    inline constexpr auto slapWobble = "slap_wobble"; // 0-100%, wow/flutter depth (0..0.5% W&F)
+    inline constexpr auto slapAge = "slap_age";       // 0-100%, tape age: hiss + asperity + extra spacing loss
+
     inline constexpr auto slapLevel = "slap_level";
     inline constexpr auto slapMute = "slap_mute";
     inline constexpr auto slapAudition = "slap_audition";

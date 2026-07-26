@@ -166,6 +166,8 @@ private:
     std::atomic<float>* slapTime = nullptr;
     std::atomic<float>* slapStereo = nullptr;
     std::atomic<float>* slapTone = nullptr;
+    std::atomic<float>* slapWobble = nullptr;
+    std::atomic<float>* slapAge = nullptr;
 
     std::array<std::atomic<float>*, MiserereEngine::numBusses> busLevelDb {};
     std::array<std::atomic<float>*, MiserereEngine::numBusses> busMuteFlag {};

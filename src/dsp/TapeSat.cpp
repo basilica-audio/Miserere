@@ -23,6 +23,8 @@ void TapeSat::prepare (const juce::dsp::ProcessSpec& spec)
     driveDbSmoothed.reset (sampleRate, smoothingTimeSeconds);
     driveDbSmoothed.setCurrentAndTargetValue (lastDriveDb);
 
+    saturators.assign (static_cast<size_t> (spec.numChannels), {});
+
     reset();
 }
 
@@ -30,6 +32,9 @@ void TapeSat::reset()
 {
     preEmphasis.reset();
     deEmphasis.reset();
+
+    for (auto& stage : saturators)
+        stage.reset();
 }
 
 void TapeSat::setDriveDb (float newDriveDb) noexcept
@@ -57,15 +62,23 @@ void TapeSat::process (juce::dsp::AudioBlock<float>& block) noexcept
     juce::dsp::ProcessContextReplacing<float> context (block);
     preEmphasis.process (context);
 
+    // Residual-form ADAA rendering of the shared TapeSaturator curve
+    // (brief F1): the linear part comp*g*x passes exactly aligned; only the
+    // distortion residual is antiderivative-anti-aliased.
     const auto driveGainLinear = juce::Decibels::decibelsToGain (driveDb);
     const auto compensation = TapeSaturator::compensationForDrive (driveGainLinear);
 
-    for (size_t channel = 0; channel < numChannels; ++channel)
+    const auto channelsToProcess = juce::jmin (numChannels, saturators.size());
+
+    for (size_t channel = 0; channel < channelsToProcess; ++channel)
     {
+        auto& stage = saturators[channel];
+        stage.prepareBlock (driveGainLinear, compensation);
+
         auto* data = block.getChannelPointer (channel);
 
         for (size_t sample = 0; sample < numSamples; ++sample)
-            data[sample] = TapeSaturator::processSample (data[sample], driveGainLinear, compensation);
+            data[sample] = stage.processSample (data[sample]);
     }
 
     deEmphasis.process (context);

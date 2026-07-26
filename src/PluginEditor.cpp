@@ -132,6 +132,8 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (slap, ParamIDs::slapTime, "Time");
     addToggle (slap, ParamIDs::slapStereo, "Stereo");
     addKnob (slap, ParamIDs::slapTone, "Tone");
+    addKnob (slap, ParamIDs::slapWobble, "Wobble");
+    addKnob (slap, ParamIDs::slapAge, "Age");
     addKnob (slap, ParamIDs::slapLevel, "Level");
     addToggle (slap, ParamIDs::slapMute, "Mute");
     addToggle (slap, ParamIDs::slapAudition, "Audition");

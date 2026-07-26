@@ -5,19 +5,19 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <vector>
 
-// Bus (1) CRUSH: per-ratio static curves (including the ALL-mode plateau's
-// non-monotonic slope), the ALL-mode transient-lag overshoot, dual-rate
-// program-dependent release, the input-drive paradigm (no threshold knob),
-// and unlinked-vs-linked stereo detection - design-brief.md guarantees 3
-// and 10.
+// Bus (1) CRUSH, v0.5.0 feedback-FET engine (brief F3 / section 6.4): the
+// measurable circuit signatures - ratio creep, attack/release coupling
+// through the shared cap, knee narrowing with ratio, the genuine
+// all-buttons bias state, panel-spec ballistics - plus the input-drive
+// paradigm, linked/unlinked detection and the GR-gated colour, carried over
+// from the previous suites.
 namespace
 {
     constexpr double testSampleRate = 48000.0;
-    constexpr int testBlockSize = 24000; // 0.5 s: lets the envelope fully settle
-    constexpr int settleSamples = 12000;
 
-    juce::dsp::ProcessSpec makeTestSpec (int numChannels, int maxBlockSize = testBlockSize)
+    juce::dsp::ProcessSpec makeTestSpec (int numChannels, int maxBlockSize)
     {
         juce::dsp::ProcessSpec spec;
         spec.sampleRate = testSampleRate;
@@ -26,120 +26,388 @@ namespace
         return spec;
     }
 
-    double measureGainChangeDb (FetCrush& crush, double frequencyHz, float amplitude)
+    // Steady-state gain change (tail RMS out/in) for a 1 kHz sine at
+    // `amplitude`, 0 dB input drive unless stated.
+    double measureSettledGainDb (FetCrush& crush, double frequencyHz, float amplitude, double seconds = 0.5)
     {
-        crush.prepare (makeTestSpec (1));
+        const auto blockSize = 4800;
+        crush.prepare (makeTestSpec (1, blockSize));
 
-        juce::AudioBuffer<float> reference (1, testBlockSize);
-        TestHelpers::fillWithSine (reference, testSampleRate, frequencyHz, amplitude);
+        const auto numBlocks = juce::jmax (2, static_cast<int> (seconds * testSampleRate / blockSize));
 
-        juce::AudioBuffer<float> processed;
-        processed.makeCopyOf (reference);
+        juce::AudioBuffer<float> lastBlock (1, blockSize);
 
-        juce::dsp::AudioBlock<float> block (processed);
-        crush.process (block);
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (1, blockSize);
+            TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, amplitude, b * blockSize);
+            juce::dsp::AudioBlock<float> block (buffer);
+            crush.process (block);
 
-        const auto inputRms = TestHelpers::tailRms (reference, settleSamples);
-        const auto outputRms = TestHelpers::tailRms (processed, settleSamples);
+            if (b == numBlocks - 1)
+                lastBlock.makeCopyOf (buffer);
+        }
 
-        REQUIRE (inputRms > 0.0);
-        REQUIRE (outputRms > 0.0);
+        const auto inRms = static_cast<double> (amplitude) / juce::MathConstants<double>::sqrt2;
+        const auto outRms = TestHelpers::rms (lastBlock);
+        return juce::Decibels::gainToDecibels (outRms / inRms);
+    }
 
-        return juce::Decibels::gainToDecibels (outputRms / inputRms);
+    // Static-curve point: settled GR (meter) for a driven 1 kHz sine at
+    // `inputDb` dBFS.
+    double measureSettledGrDb (FetCrush::Ratio ratio, double inputDb, float attackStep = 6.0f, float releaseStep = 6.0f)
+    {
+        FetCrush crush;
+        crush.setRatio (ratio);
+        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setInputDriveDb (0.0f);
+        crush.setAttackStep (attackStep);
+        crush.setReleaseStep (releaseStep);
+
+        const auto amplitude = static_cast<float> (std::pow (10.0, inputDb / 20.0));
+        (void) measureSettledGainDb (crush, 1000.0, amplitude, 0.6);
+        return crush.getCurrentGainReductionDb();
+    }
+
+    // Input level (dBFS) at which the settled GR first reaches `targetGrDb`
+    // (linear interpolation on a 0.5 dB grid).
+    double inputLevelForGr (FetCrush::Ratio ratio, double targetGrDb, double startDb, double endDb)
+    {
+        auto previousLevel = startDb;
+        auto previousGr = measureSettledGrDb (ratio, startDb);
+
+        for (auto level = startDb + 0.5; level <= endDb; level += 0.5)
+        {
+            const auto gr = measureSettledGrDb (ratio, level);
+
+            if (gr >= targetGrDb)
+            {
+                const auto t = (targetGrDb - previousGr) / juce::jmax (1.0e-9, gr - previousGr);
+                return previousLevel + t * (level - previousLevel);
+            }
+
+            previousLevel = level;
+            previousGr = gr;
+        }
+
+        return endDb;
+    }
+
+    // GR trace at fine (32-sample) block granularity for a burst that
+    // starts at t = 0.
+    std::vector<float> measureGrTrace (FetCrush& crush, double frequencyHz, float amplitude, int numBlocks, int blockSize = 32)
+    {
+        std::vector<float> trace;
+        trace.reserve (static_cast<size_t> (numBlocks));
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (1, blockSize);
+            TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, amplitude, b * blockSize);
+            juce::dsp::AudioBlock<float> block (buffer);
+            crush.process (block);
+            trace.push_back (crush.getCurrentGainReductionDb());
+        }
+
+        return trace;
     }
 }
 
 //==============================================================================
-// Static curve (pure function - no envelope dynamics involved).
+// 6.4a - ratio creep: 1 kHz at +6 dB over threshold held 2 s: the
+// instantaneous ratio at t = 10 ms is LOWER than at t = 1 s (the feedback
+// loop keeps topping the cap - effective ratio grows after the transient).
 
-TEST_CASE ("Crush: per-ratio thresholds rise and knees harden as ratio increases", "[dsp][crush][static-curve]")
-{
-    const auto r4 = FetCrush::ratioPointFor (FetCrush::Ratio::r4);
-    const auto r8 = FetCrush::ratioPointFor (FetCrush::Ratio::r8);
-    const auto r12 = FetCrush::ratioPointFor (FetCrush::Ratio::r12);
-    const auto r20 = FetCrush::ratioPointFor (FetCrush::Ratio::r20);
-
-    CHECK (r4.thresholdDb < r8.thresholdDb);
-    CHECK (r8.thresholdDb < r12.thresholdDb);
-    CHECK (r12.thresholdDb < r20.thresholdDb);
-
-    CHECK (r4.kneeDb > r8.kneeDb);
-    CHECK (r8.kneeDb > r12.kneeDb);
-    CHECK (r12.kneeDb > r20.kneeDb);
-}
-
-TEST_CASE ("Crush: static curve reduction is 0 well below threshold, positive well above it", "[dsp][crush][static-curve]")
-{
-    for (auto ratio : { FetCrush::Ratio::r4, FetCrush::Ratio::r8, FetCrush::Ratio::r12, FetCrush::Ratio::r20, FetCrush::Ratio::rAll })
-    {
-        const auto point = FetCrush::ratioPointFor (ratio);
-
-        CHECK (FetCrush::staticCurveReductionDb (point.thresholdDb - 20.0f, ratio, FetCrush::Style::allButtons) == 0.0f);
-        CHECK (FetCrush::staticCurveReductionDb (point.thresholdDb + 20.0f, ratio, FetCrush::Style::allButtons) > 10.0f);
-    }
-}
-
-TEST_CASE ("Crush: ALL mode's plateau is non-monotonic in slope (steep, then a give-back)", "[dsp][crush][static-curve][all-mode]")
-{
-    const auto point = FetCrush::ratioPointFor (FetCrush::Ratio::rAll);
-
-    // Slope just above the knee (steep zone).
-    const auto steepLow = FetCrush::staticCurveReductionDb (point.thresholdDb + 2.0f, FetCrush::Ratio::rAll, FetCrush::Style::allButtons);
-    const auto steepHigh = FetCrush::staticCurveReductionDb (point.thresholdDb + 3.0f, FetCrush::Ratio::rAll, FetCrush::Style::allButtons);
-    const auto steepSlope = steepHigh - steepLow; // dB of extra reduction per dB of extra input
-
-    // Slope well above the "kink" (give-back zone, kink at +6 dB overshoot).
-    const auto givebackLow = FetCrush::staticCurveReductionDb (point.thresholdDb + 9.0f, FetCrush::Ratio::rAll, FetCrush::Style::allButtons);
-    const auto givebackHigh = FetCrush::staticCurveReductionDb (point.thresholdDb + 10.0f, FetCrush::Ratio::rAll, FetCrush::Style::allButtons);
-    const auto givebackSlope = givebackHigh - givebackLow;
-
-    // Both zones still compress (reduction grows with input)...
-    CHECK (steepSlope > 0.0f);
-    CHECK (givebackSlope > 0.0f);
-    // ...but the give-back zone compresses LESS per dB than the steep zone -
-    // a genuinely non-monotonic reduction-slope, the plateau's "kink".
-    CHECK (givebackSlope < steepSlope);
-
-    // And the corresponding OUTPUT slope (1 - reduction slope) must
-    // therefore be < 1 everywhere (never expanding) but LARGER after the
-    // kink (giving back some of the compression).
-    CHECK ((1.0f - steepSlope) < 1.0f);
-    CHECK ((1.0f - givebackSlope) < 1.0f);
-    CHECK ((1.0f - givebackSlope) > (1.0f - steepSlope));
-}
-
-TEST_CASE ("Crush: Gentle style is a fixed, soft 2:1 voicing independent of the ratio selector", "[dsp][crush][static-curve][gentle]")
-{
-    const auto gentleWithR4Selected = FetCrush::staticCurveReductionDb (-10.0f, FetCrush::Ratio::r4, FetCrush::Style::gentle);
-    const auto gentleWithAllSelected = FetCrush::staticCurveReductionDb (-10.0f, FetCrush::Ratio::rAll, FetCrush::Style::gentle);
-
-    CHECK (gentleWithR4Selected == Catch::Approx (gentleWithAllSelected));
-
-    // Softer than the ALL-buttons character at the same input level.
-    const auto allButtonsReduction = FetCrush::staticCurveReductionDb (-10.0f, FetCrush::Ratio::rAll, FetCrush::Style::allButtons);
-    CHECK (gentleWithR4Selected < allButtonsReduction);
-}
-
-//==============================================================================
-// Envelope dynamics.
-
-TEST_CASE ("Crush: 4:1 static curve within +-2 dB", "[dsp][crush][dynamic]")
+TEST_CASE ("Crush: ratio creep - instantaneous ratio at 10 ms < ratio at 1 s", "[dsp][crush][feedback][creep]")
 {
     FetCrush crush;
     crush.setRatio (FetCrush::Ratio::r4);
     crush.setStyle (FetCrush::Style::allButtons);
     crush.setInputDriveDb (0.0f);
-    crush.setAttackStep (7.0f);
+    crush.setAttackStep (5.0f);
     crush.setReleaseStep (4.0f);
 
-    const auto measured = measureGainChangeDb (crush, 1000.0, 0.5f);
+    constexpr int blockSize = 96; // 2 ms
+    crush.prepare (makeTestSpec (1, blockSize));
 
-    const auto point = FetCrush::ratioPointFor (FetCrush::Ratio::r4);
-    const auto inputPeakDb = juce::Decibels::gainToDecibels (0.5);
-    const auto expected = -std::max (0.0, inputPeakDb - static_cast<double> (point.thresholdDb)) * (1.0 - 1.0 / static_cast<double> (point.ratio));
+    const auto amplitude = static_cast<float> (std::pow (10.0, (-30.0 + 6.0) / 20.0)); // +6 dB over the 4:1 threshold
 
-    CHECK (measured == Catch::Approx (expected).margin (2.0));
+    const auto numBlocks = static_cast<int> (2.0 * testSampleRate / blockSize);
+    const auto trace = measureGrTrace (crush, 1000.0, amplitude, numBlocks, blockSize);
+
+    const auto grAt10ms = trace[static_cast<size_t> (0.010 * testSampleRate / blockSize)];
+    const auto grAt1s = trace[static_cast<size_t> (1.0 * testSampleRate / blockSize)];
+
+    // ratio(t) = over / (over - GR(t)) with over = 6 dB: monotone in GR.
+    INFO ("GR @10 ms = " << grAt10ms << " dB, GR @1 s = " << grAt1s << " dB");
+    REQUIRE (grAt1s < 5.9); // sanity: not pinned at the top of the 6 dB window
+    CHECK (grAt10ms < grAt1s);
 }
+
+//==============================================================================
+// 6.4b - attack/release coupling: the effective attack time at a FIXED
+// attack dial strictly decreases across 3 increasing (faster) release-dial
+// positions - the one-cap/two-pot signature that kills
+// independent-time-constant implementations (Gerat/Eichas Fig. 6.20, the
+// servo-rig system-identification definition: time to reach 63 % of the
+// setting's OWN settled GR, sample-accurate).
+
+TEST_CASE ("Crush: release dial changes the effective attack (shared-cap coupling)", "[dsp][crush][feedback][coupling]")
+{
+    const auto effectiveAttackSeconds = [] (float releaseStep)
+    {
+        const auto configure = [releaseStep] (FetCrush& crush, int blockSize)
+        {
+            crush.setRatio (FetCrush::Ratio::r20);
+            crush.setStyle (FetCrush::Style::allButtons);
+            crush.setInputDriveDb (16.0f); // ~+20 dB over the r20 threshold (driven)
+            crush.setAttackStep (2.0f);    // fixed, slow-ish
+            crush.setReleaseStep (releaseStep);
+            crush.prepare (makeTestSpec (1, blockSize));
+        };
+
+        // Own settled GR first.
+        FetCrush settledCrush;
+        configure (settledCrush, 480);
+        (void) measureGrTrace (settledCrush, 1000.0, 0.5f, static_cast<int> (1.0 * testSampleRate / 480), 480);
+        const auto settled = settledCrush.getCurrentGainReductionDb();
+        REQUIRE (settled > 6.0f);
+
+        // Sample-accurate time to 63 % of it.
+        FetCrush crush;
+        configure (crush, 1);
+        const auto target = 0.63f * settled;
+        const auto maxSamples = static_cast<int> (0.02 * testSampleRate);
+
+        for (int n = 0; n < maxSamples; ++n)
+        {
+            juce::AudioBuffer<float> buffer (1, 1);
+            TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.5f, n);
+            juce::dsp::AudioBlock<float> block (buffer);
+            crush.process (block);
+
+            if (crush.getCurrentGainReductionDb() >= target)
+                return (n + 1) / testSampleRate;
+        }
+
+        return static_cast<double> (maxSamples) / testSampleRate;
+    };
+
+    const auto slowRelease = effectiveAttackSeconds (1.0f);
+    const auto midRelease = effectiveAttackSeconds (4.0f);
+    const auto fastRelease = effectiveAttackSeconds (7.0f);
+
+    INFO ("effective attack t63: release 1 -> " << slowRelease * 1e6 << " us, release 4 -> "
+          << midRelease * 1e6 << " us, release 7 -> " << fastRelease * 1e6 << " us");
+
+    CHECK (midRelease < slowRelease);
+    CHECK (fastRelease < midRelease);
+}
+
+//==============================================================================
+// 6.4c - knee ordering: the measured knee width strictly decreases from
+// 4:1 to 20:1 (the emergent feedback knee narrows as the loop steepens).
+// Knee width metric: input-level span between the GR = 0.3 dB and
+// GR = 2.5 dB points of the settled static curve.
+
+TEST_CASE ("Crush: knee width strictly decreases 4:1 -> 8:1 -> 12:1 -> 20:1", "[dsp][crush][feedback][knee]")
+{
+    const auto kneeWidth = [] (FetCrush::Ratio ratio, double thresholdDb)
+    {
+        const auto onset = inputLevelForGr (ratio, 0.3, thresholdDb - 10.0, thresholdDb + 14.0);
+        const auto deep = inputLevelForGr (ratio, 2.5, onset - 0.5, thresholdDb + 16.0);
+        return deep - onset;
+    };
+
+    const auto w4 = kneeWidth (FetCrush::Ratio::r4, -30.0);
+    const auto w8 = kneeWidth (FetCrush::Ratio::r8, -28.0);
+    const auto w12 = kneeWidth (FetCrush::Ratio::r12, -26.0);
+    const auto w20 = kneeWidth (FetCrush::Ratio::r20, -24.0);
+
+    INFO ("knee widths (dB): 4:1 = " << w4 << ", 8:1 = " << w8 << ", 12:1 = " << w12 << ", 20:1 = " << w20);
+
+    CHECK (w4 > w8);
+    CHECK (w8 > w12);
+    CHECK (w12 > w20);
+}
+
+//==============================================================================
+// 6.4d - ABI: the all-buttons state is a genuine fifth bias state.
+
+TEST_CASE ("Crush: ABI linear-region gain > 20:1 linear-region gain", "[dsp][crush][abi]")
+{
+    const auto measureLinearGain = [] (FetCrush::Ratio ratio)
+    {
+        FetCrush crush;
+        crush.setRatio (ratio);
+        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setInputDriveDb (0.0f);
+        crush.setAttackStep (6.0f);
+        crush.setReleaseStep (6.0f);
+        return measureSettledGainDb (crush, 1000.0, 0.005f); // -46 dBFS, far below every threshold
+    };
+
+    const auto allGain = measureLinearGain (FetCrush::Ratio::rAll);
+    const auto r20Gain = measureLinearGain (FetCrush::Ratio::r20);
+
+    INFO ("linear-region gain: ALL = " << allGain << " dB, 20:1 = " << r20Gain << " dB");
+    CHECK (allGain > r20Gain + 0.3);
+    CHECK (allGain - r20Gain < 1.5); // "+0.5-1 dB" class, not a level jump
+}
+
+TEST_CASE ("Crush: ABI slope sits in the 12:1..20:1 window", "[dsp][crush][abi][slope]")
+{
+    // Static slope between +6 and +12 dB over the ALL threshold (-24 dB).
+    const auto gr6 = measureSettledGrDb (FetCrush::Ratio::rAll, -18.0);
+    const auto gr12 = measureSettledGrDb (FetCrush::Ratio::rAll, -12.0);
+
+    const auto outDelta = 6.0 - (gr12 - gr6); // output rise for 6 dB input rise
+    REQUIRE (outDelta > 0.0);
+    const auto slope = 6.0 / outDelta;
+
+    INFO ("ABI static slope = " << slope << ":1 (GR " << gr6 << " -> " << gr12 << " dB)");
+    CHECK (slope >= 12.0);
+    CHECK (slope <= 20.0);
+}
+
+TEST_CASE ("Crush: ABI step response overshoots >= 1 dB GR beyond the settled value", "[dsp][crush][abi][overshoot]")
+{
+    FetCrush crush;
+    crush.setRatio (FetCrush::Ratio::rAll);
+    crush.setStyle (FetCrush::Style::allButtons);
+    // Drive chosen so the settled GR sits below the ~30 dB divider ceiling
+    // - the overshoot needs headroom above the settled value to be
+    // observable at all.
+    crush.setInputDriveDb (12.0f);
+    crush.setAttackStep (6.0f);
+    crush.setReleaseStep (6.0f);
+
+    constexpr int blockSize = 32;
+    crush.prepare (makeTestSpec (1, blockSize));
+
+    const auto numBlocks = static_cast<int> (1.0 * testSampleRate / blockSize);
+    const auto trace = measureGrTrace (crush, 1000.0, 0.5f, numBlocks, blockSize);
+
+    float earlyPeak = 0.0f;
+    for (size_t i = 0; i < static_cast<size_t> (0.05 * testSampleRate / blockSize); ++i)
+        earlyPeak = juce::jmax (earlyPeak, trace[i]);
+
+    const auto settled = trace.back();
+
+    INFO ("ABI GR early peak = " << earlyPeak << " dB, settled = " << settled << " dB");
+    CHECK (earlyPeak >= settled + 1.0f);
+}
+
+//==============================================================================
+// 6.4e - ballistics: panel-spec attack/release ranges, monotone in dial.
+
+TEST_CASE ("Crush: attack 63%-GR times span the panel range and are monotone in the dial", "[dsp][crush][ballistics][attack]")
+{
+    const auto attackTimeSeconds = [] (float attackStep)
+    {
+        FetCrush crush;
+        crush.setRatio (FetCrush::Ratio::r20);
+        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setInputDriveDb (16.0f); // tone burst ~+20 dB over threshold
+        crush.setAttackStep (attackStep);
+        crush.setReleaseStep (4.0f);
+
+        constexpr int blockSize = 1; // sample-accurate trace
+        crush.prepare (makeTestSpec (1, blockSize));
+
+        // Settled GR first (long render), then re-measure the onset.
+        FetCrush settledCrush;
+        settledCrush.setRatio (FetCrush::Ratio::r20);
+        settledCrush.setStyle (FetCrush::Style::allButtons);
+        settledCrush.setInputDriveDb (16.0f);
+        settledCrush.setAttackStep (attackStep);
+        settledCrush.setReleaseStep (4.0f);
+        (void) measureSettledGainDb (settledCrush, 1000.0, 0.5f, 0.3);
+        const auto settledGr = settledCrush.getCurrentGainReductionDb();
+        REQUIRE (settledGr > 6.0f);
+
+        const auto target = 0.63f * settledGr;
+        const auto maxSamples = static_cast<int> (0.005 * testSampleRate);
+
+        for (int n = 0; n < maxSamples; ++n)
+        {
+            juce::AudioBuffer<float> buffer (1, 1);
+            TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.5f, n);
+            juce::dsp::AudioBlock<float> block (buffer);
+            crush.process (block);
+
+            if (crush.getCurrentGainReductionDb() >= target)
+                return (n + 1) / testSampleRate;
+        }
+
+        return static_cast<double> (maxSamples) / testSampleRate;
+    };
+
+    const auto tSlow = attackTimeSeconds (1.0f);
+    const auto tMid = attackTimeSeconds (4.0f);
+    const auto tFast = attackTimeSeconds (7.0f);
+
+    INFO ("attack 63% times: dial 1 = " << tSlow * 1.0e6 << " us, dial 4 = " << tMid * 1.0e6
+          << " us, dial 7 = " << tFast * 1.0e6 << " us");
+
+    CHECK (tSlow > tMid);
+    CHECK (tMid > tFast);
+    CHECK (tFast >= 18.0e-6);  // 20 us class (1 sample at 48 k = 20.8 us)
+    CHECK (tSlow <= 840.0e-6); // 800 us class
+}
+
+TEST_CASE ("Crush: release 37%-residual times span the panel range and are monotone in the dial", "[dsp][crush][ballistics][release]")
+{
+    const auto releaseTimeSeconds = [] (float releaseStep)
+    {
+        FetCrush crush;
+        crush.setRatio (FetCrush::Ratio::r20);
+        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setInputDriveDb (16.0f);
+        crush.setAttackStep (6.0f);
+        crush.setReleaseStep (releaseStep);
+
+        constexpr int blockSize = 96; // 2 ms resolution
+        crush.prepare (makeTestSpec (1, blockSize));
+
+        // Drive to settled GR.
+        const auto burstBlocks = static_cast<int> (0.5 * testSampleRate / blockSize);
+        (void) measureGrTrace (crush, 1000.0, 0.5f, burstBlocks, blockSize);
+        const auto grAtStop = crush.getCurrentGainReductionDb();
+        REQUIRE (grAtStop > 6.0f);
+
+        const auto target = 0.37f * grAtStop;
+        const auto maxBlocks = static_cast<int> (3.0 * testSampleRate / blockSize);
+
+        for (int b = 0; b < maxBlocks; ++b)
+        {
+            juce::AudioBuffer<float> silence (1, blockSize);
+            silence.clear();
+            juce::dsp::AudioBlock<float> block (silence);
+            crush.process (block);
+
+            if (crush.getCurrentGainReductionDb() <= target)
+                return (b + 1) * blockSize / testSampleRate;
+        }
+
+        return 3.0;
+    };
+
+    const auto tSlow = releaseTimeSeconds (1.0f);
+    const auto tMid = releaseTimeSeconds (4.0f);
+    const auto tFast = releaseTimeSeconds (7.0f);
+
+    INFO ("release 37% times: dial 1 = " << tSlow * 1e3 << " ms, dial 4 = " << tMid * 1e3
+          << " ms, dial 7 = " << tFast * 1e3 << " ms");
+
+    CHECK (tSlow > tMid);
+    CHECK (tMid > tFast);
+    CHECK (tFast >= 0.040); // 50 ms class
+    CHECK (tSlow <= 1.20);  // 1100 ms class
+}
+
+//==============================================================================
+// Carried-over behaviours.
 
 TEST_CASE ("Crush: input drive increases measured gain reduction", "[dsp][crush][drive]")
 {
@@ -151,112 +419,50 @@ TEST_CASE ("Crush: input drive increases measured gain reduction", "[dsp][crush]
         crush.setInputDriveDb (driveDb);
         crush.setAttackStep (7.0f);
         crush.setReleaseStep (4.0f);
-
-        (void) measureGainChangeDb (crush, 1000.0, 0.25f);
+        (void) measureSettledGainDb (crush, 1000.0, 0.25f);
         return crush.getCurrentGainReductionDb();
     };
 
     const auto lowDriveGr = measureAtDrive (0.0f);
     const auto highDriveGr = measureAtDrive (18.0f);
 
+    INFO ("GR at 0 dB drive = " << lowDriveGr << " dB, at 18 dB drive = " << highDriveGr << " dB");
     CHECK (highDriveGr > lowDriveGr);
-    CHECK (highDriveGr - lowDriveGr > 6.0f); // most of the 18 dB drive step shows up as extra GR at 20:1
+    CHECK (highDriveGr - lowDriveGr > 6.0f);
 }
 
-TEST_CASE ("Crush: ALL mode shows more transient overshoot than a non-ALL ratio at the same ballistics", "[dsp][crush][all-mode][transient]")
+TEST_CASE ("Crush: Gentle style is a fixed soft voicing independent of the ratio selector", "[dsp][crush][gentle]")
 {
-    const auto measureOvershootRatio = [] (FetCrush::Ratio ratio)
+    const auto measureGentleGr = [] (FetCrush::Ratio ratio)
     {
         FetCrush crush;
         crush.setRatio (ratio);
-        crush.setStyle (FetCrush::Style::allButtons);
-        crush.setInputDriveDb (24.0f);
-        crush.setAttackStep (1.0f); // slowest base attack, so the extra ALL-mode lag is proportionally significant
-        crush.setReleaseStep (4.0f);
-
-        juce::dsp::ProcessSpec spec;
-        spec.sampleRate = testSampleRate;
-        spec.maximumBlockSize = 4800;
-        spec.numChannels = 1;
-        crush.prepare (spec);
-
-        juce::AudioBuffer<float> buffer (1, 4800);
-        TestHelpers::fillWithSine (buffer, testSampleRate, 500.0, 0.7f);
-
-        juce::dsp::AudioBlock<float> block (buffer);
-        crush.process (block);
-
-        const auto* data = buffer.getReadPointer (0);
-
-        float earlyPeak = 0.0f;
-        for (int i = 0; i < 96; ++i) // first 2 ms
-            earlyPeak = std::max (earlyPeak, std::abs (data[i]));
-
-        float settledPeak = 0.0f;
-        for (int i = 4000; i < 4800; ++i) // settled tail
-            settledPeak = std::max (settledPeak, std::abs (data[i]));
-
-        REQUIRE (settledPeak > 0.0f);
-        return earlyPeak / settledPeak;
+        crush.setStyle (FetCrush::Style::gentle);
+        crush.setInputDriveDb (0.0f);
+        crush.setAttackStep (6.0f);
+        crush.setReleaseStep (6.0f);
+        (void) measureSettledGainDb (crush, 1000.0, 0.25f);
+        return crush.getCurrentGainReductionDb();
     };
 
-    const auto allModeOvershoot = measureOvershootRatio (FetCrush::Ratio::rAll);
-    const auto r20Overshoot = measureOvershootRatio (FetCrush::Ratio::r20);
+    const auto gentleR4 = measureGentleGr (FetCrush::Ratio::r4);
+    const auto gentleAll = measureGentleGr (FetCrush::Ratio::rAll);
 
-    CHECK (allModeOvershoot > r20Overshoot);
+    CHECK (gentleR4 == Catch::Approx (gentleAll).margin (0.2));
+
+    // Softer than the all-buttons character at the same input level.
+    FetCrush allButtons;
+    allButtons.setRatio (FetCrush::Ratio::rAll);
+    allButtons.setStyle (FetCrush::Style::allButtons);
+    allButtons.setInputDriveDb (0.0f);
+    allButtons.setAttackStep (6.0f);
+    allButtons.setReleaseStep (6.0f);
+    (void) measureSettledGainDb (allButtons, 1000.0, 0.25f);
+
+    CHECK (gentleR4 < allButtons.getCurrentGainReductionDb());
 }
 
-TEST_CASE ("Crush: dual-rate release recovers far faster after a short burst than after sustained GR", "[dsp][crush][release]")
-{
-    const auto measureRecoveryBlocks = [] (double sustainSeconds)
-    {
-        FetCrush crush;
-        crush.setRatio (FetCrush::Ratio::rAll);
-        crush.setStyle (FetCrush::Style::allButtons);
-        crush.setInputDriveDb (18.0f);
-        crush.setAttackStep (7.0f);
-        crush.setReleaseStep (7.0f); // fastest base release, so the dual-rate blend is the dominant effect
-
-        constexpr int blockSize = 256;
-        crush.prepare (makeTestSpec (1, blockSize));
-
-        const auto sustainBlocks = juce::jmax (1, static_cast<int> (sustainSeconds * testSampleRate / blockSize));
-
-        for (int block = 0; block < sustainBlocks; ++block)
-        {
-            juce::AudioBuffer<float> buffer (1, blockSize);
-            TestHelpers::fillWithSine (buffer, testSampleRate, 500.0, 0.8f, block * blockSize);
-            juce::dsp::AudioBlock<float> audioBlock (buffer);
-            crush.process (audioBlock);
-        }
-
-        REQUIRE (crush.getCurrentGainReductionDb() > 4.0f);
-
-        int blocksUntilRecovered = 0;
-        for (; blocksUntilRecovered < 2000; ++blocksUntilRecovered)
-        {
-            juce::AudioBuffer<float> silence (1, blockSize);
-            silence.clear();
-            juce::dsp::AudioBlock<float> audioBlock (silence);
-            crush.process (audioBlock);
-
-            if (crush.getCurrentGainReductionDb() < 0.5f)
-                break;
-        }
-
-        return blocksUntilRecovered;
-    };
-
-    const auto shortBurstRecovery = measureRecoveryBlocks (0.05);  // 50 ms
-    const auto sustainedRecovery = measureRecoveryBlocks (5.0);    // 5 s
-
-    INFO ("short-burst recovery blocks = " << shortBurstRecovery << ", sustained recovery blocks = " << sustainedRecovery);
-
-    CHECK (sustainedRecovery > shortBurstRecovery);
-    CHECK (sustainedRecovery >= shortBurstRecovery * 3);
-}
-
-TEST_CASE ("Crush: reset() clears the envelope and duration integrator", "[dsp][crush][reset]")
+TEST_CASE ("Crush: reset() clears the loop state", "[dsp][crush][reset]")
 {
     FetCrush crush;
     crush.setRatio (FetCrush::Ratio::rAll);
@@ -297,17 +503,12 @@ TEST_CASE ("Crush: unlinked (default) - a hard-panned L-only burst produces GR o
     juce::dsp::AudioBlock<float> block (buffer);
     crush.process (block);
 
-    const auto leftPeak = TestHelpers::peakAbsolute (juce::AudioBuffer<float> (buffer.getArrayOfWritePointers(), 1, 0, 9600));
-    const auto rightMaxAbs = [&]
-    {
-        float peak = 0.0f;
-        const auto* data = buffer.getReadPointer (1);
-        for (int i = 0; i < 9600; ++i)
-            peak = std::max (peak, std::abs (data[i]));
-        return peak;
-    }();
+    float rightMaxAbs = 0.0f;
+    const auto* right = buffer.getReadPointer (1);
+    for (int i = 0; i < 9600; ++i)
+        rightMaxAbs = std::max (rightMaxAbs, std::abs (right[i]));
 
-    CHECK (leftPeak > 0.0f);
+    CHECK (TestHelpers::peakAbsolute (buffer) > 0.0f);
     CHECK (rightMaxAbs < 1.0e-6f); // right was silent input and unlinked -> stays silent output
 }
 
@@ -315,33 +516,27 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
 {
     constexpr float driveDb = 12.0f;
 
-    // Note: crush_input drives the AUDIO path unconditionally too (see
-    // FetCrush.h - "driving harder is meant to be louder", uncompensated),
-    // so even a channel with zero gain reduction still measures a gain
-    // CHANGE of ~+driveDb (the drive itself), not 0 dB. The comparison
-    // below is therefore between the two conditions' measured gain, not
-    // against an absolute 0 dB reference.
+    // crush_input drives the AUDIO path unconditionally too, so a channel
+    // with zero gain reduction still measures ~+driveDb of gain change; the
+    // comparison is between conditions, not against 0 dB.
     const auto measureRightChannelGainDb = [] (bool linked)
     {
+        constexpr int blockSize = 24000;
+
         FetCrush crush;
-        crush.setRatio (FetCrush::Ratio::r20); // threshold -24 dB - highest (least sensitive) of the table
+        crush.setRatio (FetCrush::Ratio::r20);
         crush.setInputDriveDb (driveDb);
         crush.setAttackStep (7.0f);
         crush.setReleaseStep (4.0f);
         crush.setLinked (linked);
-        crush.prepare (makeTestSpec (2, testBlockSize));
+        crush.prepare (makeTestSpec (2, blockSize));
 
-        juce::AudioBuffer<float> buffer (2, testBlockSize);
+        juce::AudioBuffer<float> buffer (2, blockSize);
         buffer.clear();
 
-        // Left carries a loud tone (well above threshold once driven);
-        // right carries a small tone whose OWN driven level (-40 + 12 =
-        // -28 dBFS) stays comfortably below the -24 dB threshold - so any
-        // gain reduction measured on the right can only come from the
-        // linked (shared) detector.
         auto* left = buffer.getWritePointer (0);
         auto* right = buffer.getWritePointer (1);
-        for (int i = 0; i < testBlockSize; ++i)
+        for (int i = 0; i < blockSize; ++i)
         {
             const auto phase = juce::MathConstants<double>::twoPi * 500.0 * i / testSampleRate;
             left[i] = 0.9f * static_cast<float> (std::sin (phase));
@@ -353,7 +548,7 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
 
         const auto rightInputRms = 0.01 / juce::MathConstants<double>::sqrt2;
         const auto rightOutputRms = TestHelpers::tailRms (
-            juce::AudioBuffer<float> (buffer.getArrayOfWritePointers() + 1, 1, 0, testBlockSize), settleSamples);
+            juce::AudioBuffer<float> (buffer.getArrayOfWritePointers() + 1, 1, 0, blockSize), 12000);
 
         return juce::Decibels::gainToDecibels (rightOutputRms / rightInputRms);
     };
@@ -361,102 +556,67 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
     const auto unlinkedRightGainDb = measureRightChannelGainDb (false);
     const auto linkedRightGainDb = measureRightChannelGainDb (true);
 
-    // Unlinked: the right channel's own (quiet) signal never trips the
-    // limiter, so its only gain change is the drive itself.
+    INFO ("right-channel gain: unlinked = " << unlinkedRightGainDb << " dB, linked = " << linkedRightGainDb << " dB");
+
+    // Unlinked: the quiet right channel never trips the limiter.
     CHECK (unlinkedRightGainDb == Catch::Approx (driveDb).margin (0.5));
-    // Linked: the shared (loud-left-driven) detector pulls the right
-    // channel's gain down measurably below the drive-only baseline.
+    // Linked: the shared (loud-left-driven) sidechain pulls the right
+    // channel's gain down measurably.
     CHECK (linkedRightGainDb < unlinkedRightGainDb - 3.0);
 }
 
 //==============================================================================
-// M2 voicing pass: program-dependent colour (design-brief.md's CRUSH "Color"
-// line; docs/research-notes.md's FET section - "Less than 0.5% THD ... at
-// 1.1 seconds release", modelled as a small, GR-gated asymmetric-harmonic +
-// transformer-style LF-saturation addition on top of the existing, untouched
-// detector-ripple colouration).
+// GR-gated colour (kept from the M2 voicing pass, now the FET eps-term +
+// ADAA'd LF transformer delta).
+
 namespace
 {
-    // Measures a THD-style ratio (harmonics 2-6 vs the fundamental, see
-    // TestHelpers::estimateThdRatio) on FetCrush's settled tail output for a
-    // steady tone, after driving hard enough to reach a target gain
-    // reduction.
-    double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude, float attackStep = 7.0f, float releaseStep = 7.0f)
+    double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude,
+                              float releaseStep = 7.0f)
     {
+        constexpr int blockSize = 24000;
+        constexpr int settle = 12000;
+
         FetCrush crush;
         crush.setRatio (ratio);
         crush.setStyle (FetCrush::Style::allButtons);
         crush.setInputDriveDb (driveDb);
-        crush.setAttackStep (attackStep);
+        crush.setAttackStep (7.0f);
         crush.setReleaseStep (releaseStep);
-        crush.prepare (makeTestSpec (1));
+        crush.prepare (makeTestSpec (1, blockSize));
 
-        juce::AudioBuffer<float> buffer (1, testBlockSize);
+        juce::AudioBuffer<float> buffer (1, blockSize);
         TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, amplitude);
 
         juce::dsp::AudioBlock<float> block (buffer);
         crush.process (block);
 
-        // A whole number of cycles in the measurement window keeps the FFT
-        // bins landing exactly on the fundamental/harmonics (no spectral
-        // leakage inflating the estimate).
-        const auto cyclesPerWindow = std::floor (frequencyHz * (testBlockSize - settleSamples) / testSampleRate);
+        const auto cyclesPerWindow = std::floor (frequencyHz * (blockSize - settle) / testSampleRate);
         const auto windowSamples = static_cast<int> (cyclesPerWindow * testSampleRate / frequencyHz);
 
-        return TestHelpers::estimateThdRatio (buffer, 0, settleSamples, windowSamples, testSampleRate, frequencyHz);
+        return TestHelpers::estimateThdRatio (buffer, 0, settle, windowSamples, testSampleRate, frequencyHz);
     }
 }
 
-TEST_CASE ("Crush: colour stage stays negligible when the signal never reaches gain reduction", "[dsp][crush][colour]")
+TEST_CASE ("Crush: colour stays negligible when the signal never reaches gain reduction", "[dsp][crush][colour]")
 {
-    // Well below every ratio's threshold (even r20's -24 dB) at 0 dB drive:
-    // reductionDb stays 0, so colourAmount is gated to 0 throughout.
     const auto thd = measureThdAtDrive (FetCrush::Ratio::r4, 0.0f, 1000.0, 0.02f);
     CHECK (thd < 0.002); // < 0.2%
 }
 
-TEST_CASE ("Crush: colour stage's harmonic content grows with gain reduction (level-dependent, design-brief.md)", "[dsp][crush][colour]")
+TEST_CASE ("Crush: colour grows with gain reduction (eps-term ~ GR depth)", "[dsp][crush][colour]")
 {
-    const auto lowGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 6.0f, 1000.0, 0.3f);
-    const auto highGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f);
+    // Slowest release isolates the eps-term from sidechain-ripple
+    // distortion (which scales the OPPOSITE way with overdrive).
+    const auto lowGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 6.0f, 1000.0, 0.3f, 1.0f);
+    const auto highGrThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f, 1.0f);
 
     INFO ("low-GR THD = " << lowGrThd << ", high-GR THD = " << highGrThd);
     CHECK (highGrThd > lowGrThd);
 }
 
-TEST_CASE ("Crush: colour stage stays under a mild THD ceiling at moderate gain reduction", "[dsp][crush][colour]")
+TEST_CASE ("Crush: colour is LF-selective (transformer delta below ~150 Hz)", "[dsp][crush][colour][lf]")
 {
-    // "Moderate GR" here targets roughly half of harmonicReferenceGrDb
-    // (~6 dB) - an engineering calibration choice tuned to sit comfortably
-    // under 1%, in the spirit of (not a bench-measured match to) the
-    // hardware's own "less than 0.5% THD" framing (docs/research-notes.md).
-    FetCrush crush;
-    crush.setRatio (FetCrush::Ratio::r20);
-    crush.setInputDriveDb (2.0f);
-    crush.setAttackStep (7.0f);
-    crush.setReleaseStep (7.0f);
-    crush.prepare (makeTestSpec (1));
-
-    juce::AudioBuffer<float> buffer (1, testBlockSize);
-    TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.1f);
-    juce::dsp::AudioBlock<float> block (buffer);
-    crush.process (block);
-
-    INFO ("measured GR = " << crush.getCurrentGainReductionDb());
-    REQUIRE (crush.getCurrentGainReductionDb() > 3.0f);
-    REQUIRE (crush.getCurrentGainReductionDb() < 12.0f);
-
-    const auto thd = measureThdAtDrive (FetCrush::Ratio::r20, 2.0f, 1000.0, 0.1f);
-    CHECK (thd < 0.01); // < 1%
-}
-
-TEST_CASE ("Crush: colour is LF-selective - a low-frequency tone shows more added harmonic content than a high-frequency tone at equal drive", "[dsp][crush][colour][lf]")
-{
-    // Both tones settle to essentially the same envelope/GR (the detector
-    // tracks amplitude, not frequency); the LF-band transformer-style term
-    // only engages fully below its ~150 Hz cutoff, so an 80 Hz tone should
-    // show measurably more added harmonic content than a 5 kHz tone under
-    // the same drive.
     const auto lowFreqThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 80.0, 0.3f);
     const auto highFreqThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 5000.0, 0.3f);
 
@@ -464,20 +624,20 @@ TEST_CASE ("Crush: colour is LF-selective - a low-frequency tone shows more adde
     CHECK (lowFreqThd > highFreqThd);
 }
 
-TEST_CASE ("Crush: colour stage keeps output finite and bounded at full-scale drive", "[dsp][crush][colour][robustness]")
+TEST_CASE ("Crush: output stays finite and bounded at full-scale drive", "[dsp][crush][robustness]")
 {
     FetCrush crush;
     crush.setRatio (FetCrush::Ratio::rAll);
     crush.setInputDriveDb (48.0f);
     crush.setAttackStep (7.0f);
     crush.setReleaseStep (1.0f);
-    crush.prepare (makeTestSpec (2));
+    crush.prepare (makeTestSpec (2, 24000));
 
-    juce::AudioBuffer<float> buffer (2, testBlockSize);
+    juce::AudioBuffer<float> buffer (2, 24000);
     TestHelpers::fillWithSine (buffer, testSampleRate, 200.0, 1.0f);
     juce::dsp::AudioBlock<float> block (buffer);
     crush.process (block);
 
     CHECK (TestHelpers::allSamplesFinite (buffer));
-    CHECK (TestHelpers::peakAbsolute (buffer) < 4.0f);
+    CHECK (TestHelpers::peakAbsolute (buffer) < 16.0f); // 48 dB drive minus ~30 dB max GR class
 }

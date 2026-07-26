@@ -147,6 +147,72 @@ TEST_CASE ("Mute wins over Audition on the same bus", "[mute][audition][dsp]")
     CHECK (outputRms < 1.0e-7);
 }
 
+//==============================================================================
+// v0.5.0 click-free mute/audition (brief F7 / section 6.9): toggling mute
+// mid-sine ramps over 3 ms - no step larger than the ramp-slope bound - and
+// once the ramp has settled the muted bus contributes exact zeros.
+
+TEST_CASE ("Mute: toggling mid-sine is click-free (3 ms ramp) and settles to exact zero", "[mute][dsp][ramp]")
+{
+    MiserereAudioProcessor processor;
+    setBool (processor, ParamIDs::crushAudition, true); // isolate the crush bus (direct path excluded)
+    setParam (processor, ParamIDs::crushLevel, 0.0f);
+    setParam (processor, ParamIDs::crushInput, 0.0f);
+    processor.prepareToPlay (48000.0, 512);
+
+    juce::MidiBuffer midi;
+
+    // Run a steady sine, then engage mute mid-stream.
+    constexpr double frequencyHz = 440.0;
+    constexpr float amplitude = 0.5f;
+
+    float previousSample = 0.0f;
+    float maxStepBeforeMute = 0.0f;
+    float maxStepDuringRamp = 0.0f;
+
+    for (int block = 0; block < 40; ++block)
+    {
+        if (block == 20)
+            setBool (processor, ParamIDs::crushMute, true);
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        TestHelpers::fillWithSine (buffer, 48000.0, frequencyHz, amplitude, block * 512);
+        processor.processBlock (buffer, midi);
+
+        const auto* data = buffer.getReadPointer (0);
+        for (int i = 0; i < 512; ++i)
+        {
+            const auto step = std::abs (data[i] - previousSample);
+            previousSample = data[i];
+
+            if (block < 20)
+                maxStepBeforeMute = juce::jmax (maxStepBeforeMute, step);
+            else if (block < 21)
+                maxStepDuringRamp = juce::jmax (maxStepDuringRamp, step);
+        }
+    }
+
+    // The 3 ms ramp changes the route gain by 1/144 per sample; the extra
+    // per-sample step it can add is bounded by amplitude * rampStep.
+    const auto rampBound = maxStepBeforeMute + amplitude * (1.0f / 144.0f) * 1.5f;
+    INFO ("max step before mute = " << maxStepBeforeMute << ", during ramp = " << maxStepDuringRamp
+          << ", bound = " << rampBound);
+    CHECK (maxStepDuringRamp <= rampBound);
+
+    // After the ramp has settled (well past 3 ms), the output is exactly
+    // zero: the crush bus route gain reached exact 0.0f, and everything
+    // else was already excluded.
+    juce::AudioBuffer<float> settled (2, 512);
+    TestHelpers::fillWithSine (settled, 48000.0, frequencyHz, amplitude, 40 * 512);
+    processor.processBlock (settled, midi);
+
+    for (int i = 0; i < 512; ++i)
+    {
+        INFO ("sample " << i);
+        REQUIRE (settled.getSample (0, i) == 0.0f);
+    }
+}
+
 TEST_CASE ("Audition is exclusive: engaging one bus's audition releases the others", "[audition][exclusivity]")
 {
     MiserereAudioProcessor processor;

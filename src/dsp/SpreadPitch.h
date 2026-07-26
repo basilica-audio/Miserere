@@ -17,10 +17,20 @@
 // classic delay-line Doppler pitch shifter: a single delay line read by TWO
 // crossfading taps whose read position glides at a rate proportional to the
 // desired pitch ratio (read speed != write speed = a pitch shift), each tap
-// wrapping and resetting to the opposite phase inside a raised-cosine
-// crossfade window before it runs out of buffer - "modulated-delay
-// (glide/crossfade)" per the brief, with the base delay (30/50 ms) itself
-// being part of the effect rather than a separate, silent send.
+// wrapping and resetting to the opposite phase inside a crossfade window
+// before it runs out of buffer.
+//
+// v0.5.0 quality pass (brief F6):
+// - 3rd-order Lagrange interpolation on both shifter delay lines (replaces
+//   linear - the interp loss at 10 kHz drops from ~2 dB to under 1 dB,
+//   tests/SpreadPitchTests.cpp).
+// - detune/timeScale ride per-sample SmoothedValue ramps (50 ms) instead of
+//   block-boundary steps - automation is click-free.
+// - grain window 40 ms -> 60 ms with an EQUAL-POWER (sin) crossfade
+//   replacing the raised-cosine window, taps still half-grain offset: the
+//   two tap gains obey g1^2 + g2^2 == 1, so the summed POWER of the
+//   (decorrelated) taps stays constant and the periodic envelope ripple on
+//   sustained vowels shrinks by more than 6 dB vs v0.4.0.
 //
 // Voice 0 (base ~30 ms) is detuned UP by `spread_detune` cents and panned
 // toward the left; voice 1 (base ~50 ms) is detuned DOWN by the same amount
@@ -40,8 +50,8 @@ public:
     void prepare (const juce::dsp::ProcessSpec& spec);
     void reset();
 
-    void setDetuneCents (float cents) noexcept { detuneCents = juce::jlimit (0.0f, 15.0f, cents); }
-    void setTimeScale (float scale) noexcept { timeScale = juce::jlimit (0.5f, 2.0f, scale); }
+    void setDetuneCents (float cents) noexcept;
+    void setTimeScale (float scale) noexcept;
     void setWidth (float amount01) noexcept;
 
     // Replaces `block`'s contents with the wet (pitch-shifted) stereo
@@ -53,21 +63,20 @@ public:
 private:
     static constexpr float baseDelayUpMs = 30.0f;
     static constexpr float baseDelayDownMs = 50.0f;
-    static constexpr float grainMs = 40.0f; // crossfade window width per voice
+    static constexpr float grainMs = 60.0f; // crossfade window width per voice (F6: was 40 ms)
     static constexpr float maxTimeScale = 2.0f;
     static constexpr float capacityHeadroomMs = 20.0f;
     static constexpr double smoothingTimeSeconds = 0.05;
 
     struct Voice
     {
-        juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine;
+        juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Lagrange3rd> delayLine;
         std::array<float, 2> tapDelaySamples { 0.0f, 0.0f }; // current read delay per crossfading tap
-        float baseDelayMs = 30.0f;
         float pitchRatio = 1.0f;
 
         void prepare (const juce::dsp::ProcessSpec& monoSpec, float maxDelaySamples);
-        void reset (float baseMs, double sampleRate);
-        float processSample (float input, float grainSamples, double sampleRate) noexcept;
+        void reset (float baseSamples, float grainSamples);
+        float processSample (float input, float baseSamples, float grainSamples) noexcept;
     };
 
     double sampleRate = 44100.0;
@@ -76,6 +85,8 @@ private:
     Voice voiceDown; // ~50 ms, pitched down
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> widthSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> detuneSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> timeScaleSmoothed;
 
     float detuneCents = 6.0f;
     float timeScale = 1.0f;

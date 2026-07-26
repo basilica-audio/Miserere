@@ -93,3 +93,57 @@ TEST_CASE ("MiserereEngine::process() performs zero heap allocations once prepar
 
     CHECK (AllocationGuard::allocationCount() == 0);
 }
+
+//==============================================================================
+// Brief section 6.12 - the guard must also cover the v0.5.0 paths that only
+// come alive at non-neutral settings: the F5 flutter generator and age noise
+// layer, the F3/F4 feedback engines' per-sample ODE iteration, and the F2
+// matched-coefficient recomputation (which runs at block rate and is exactly
+// where a stray Coefficients::make* would hide).
+TEST_CASE ("v0.5.0 paths allocate nothing: flutter, age noise, feedback engines, matched coefficients",
+           "[robustness][realtime][allocation][sota]")
+{
+    MiserereAudioProcessor processor;
+    bringUpAllBusses (processor);
+
+    // F5: wow/flutter + age noise both structurally engaged.
+    setParam (processor, ParamIDs::slapWobble, 100.0f);
+    setParam (processor, ParamIDs::slapAge, 100.0f);
+    setParam (processor, ParamIDs::slapTone, 100.0f);
+
+    // F3/F4: both feedback engines working hard.
+    setParam (processor, ParamIDs::crushInput, 36.0f);
+    setParam (processor, ParamIDs::sandPeakRed, 90.0f);
+    setParam (processor, ParamIDs::sandEmphasis, 100.0f);
+
+    // F2/F8: matched shelves and the flux-domain iron term off their
+    // neutral bypasses, so coefficients really are recomputed each block.
+    setParam (processor, ParamIDs::directEqHighGain, 12.0f);
+    setParam (processor, ParamIDs::directEqDrive, 18.0f);
+    setParam (processor, ParamIDs::directSatDrive, 12.0f);
+    setParam (processor, ParamIDs::sandPreHfBellBoost, 8.0f);
+    setParam (processor, ParamIDs::sandPreLfBoost, 8.0f);
+    setParam (processor, ParamIDs::sandPreLfCut, 8.0f);
+
+    processor.prepareToPlay (48000.0, 512);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    for (int warmup = 0; warmup < 4; ++warmup)
+    {
+        TestHelpers::fillWithSine (buffer, 48000.0, 220.0, 0.6f, warmup * 512);
+        processor.processBlock (buffer, midi);
+    }
+
+    AllocationGuard::reset();
+
+    for (int block = 0; block < 32; ++block)
+    {
+        TestHelpers::fillWithSine (buffer, 48000.0, 220.0, 0.6f, block * 512);
+        processor.processBlock (buffer, midi);
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+
+    CHECK (AllocationGuard::allocationCount() == 0);
+}

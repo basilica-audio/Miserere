@@ -82,6 +82,8 @@ namespace
             { BinaryData::roughMixGlue_json, BinaryData::roughMixGlue_jsonSize },
             { BinaryData::whisperThicken_json, BinaryData::whisperThicken_jsonSize },
             { BinaryData::aggressiveRockVocal_json, BinaryData::aggressiveRockVocal_jsonSize },
+            { BinaryData::tapeSlap75_json, BinaryData::tapeSlap75_jsonSize },
+            { BinaryData::wornSlap_json, BinaryData::wornSlap_jsonSize },
         };
     }
 }
@@ -157,6 +159,8 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     slapTime = apvts.getRawParameterValue (ParamIDs::slapTime);
     slapStereo = apvts.getRawParameterValue (ParamIDs::slapStereo);
     slapTone = apvts.getRawParameterValue (ParamIDs::slapTone);
+    slapWobble = apvts.getRawParameterValue (ParamIDs::slapWobble);
+    slapAge = apvts.getRawParameterValue (ParamIDs::slapAge);
 
     static constexpr const char* levelIds[] = { ParamIDs::crushLevel, ParamIDs::sandLevel, ParamIDs::spreadLevel, ParamIDs::slapLevel };
     static constexpr const char* muteIds[] = { ParamIDs::crushMute, ParamIDs::sandMute, ParamIDs::spreadMute, ParamIDs::slapMute };
@@ -192,6 +196,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     jassert (sandPostHfShelfFreq != nullptr && sandPostHfShelfAtten != nullptr);
     jassert (spreadDetune != nullptr && spreadTime != nullptr && spreadWidth != nullptr);
     jassert (slapTime != nullptr && slapStereo != nullptr && slapTone != nullptr);
+    jassert (slapWobble != nullptr && slapAge != nullptr);
 
     for (int bus = 0; bus < MiserereEngine::numBusses; ++bus)
     {
@@ -378,6 +383,8 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
     engine.setSlapDelayMs (load (slapTime));
     engine.setSlapStereoEnabled (loadBool (slapStereo));
     engine.setSlapToneProportion (load (slapTone) * 0.01f);
+    engine.setSlapWobbleProportion (load (slapWobble) * 0.01f);
+    engine.setSlapAgeProportion (load (slapAge) * 0.01f);
 
     for (int bus = 0; bus < MiserereEngine::numBusses; ++bus)
     {
@@ -496,7 +503,13 @@ juce::AudioProcessorParameter* MiserereAudioProcessor::getBypassParameter() cons
 //==============================================================================
 void MiserereAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    const auto state = apvts.copyState();
+    auto state = apvts.copyState();
+
+    // State schema stamp (v0.5.0): version 2 = the layout that introduced
+    // slap_wobble/slap_age. A missing property on load means version 1
+    // (v0.2.0-v0.4.0 layouts) - see setStateInformation().
+    state.setProperty ("stateVersion", 2, nullptr);
+
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
 }
@@ -507,12 +520,45 @@ void MiserereAudioProcessor::setStateInformation (const void* data, int sizeInBy
     // its unknown parameter IDs ignored by ValueTree::fromXml/APVTS's
     // internal restore - no explicit migration is attempted (pre-1.0
     // breaking parameter changes are acceptable per docs/design-brief.md's
-    // "Versioning" section). The only requirement is "no crash" - see
-    // tests/StateTests.cpp's v1-import test.
+    // "Versioning" section) - see tests/StateTests.cpp's v1-import test.
     const std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
 
-    if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
-        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    if (xmlState == nullptr || ! xmlState->hasTagName (apvts.state.getType()))
+        return;
+
+    const auto incoming = juce::ValueTree::fromXml (*xmlState);
+
+    // Explicit reset of ABSENT parameters (binding, v0.5.0 brief section
+    // 4): JUCE 8.0.14's replaceState() has NO default-fill - for any
+    // parameter missing a value-bearing child in the incoming tree,
+    // updateParameterConnectionsToChildTrees() creates the child WITHOUT a
+    // value and flushParameterValuesToValueTree() then writes the
+    // parameter's CURRENT value into it
+    // (juce_AudioProcessorValueTreeState.cpp:396-441). Loading a v0.4.0
+    // session into a live instance whose slap_wobble/slap_age are non-zero
+    // would therefore silently keep the stale values. Reset every
+    // parameter that the incoming tree does not carry back to its default
+    // BEFORE replaceState() - the same reset-then-apply pattern
+    // PresetManager::applyParsedPreset() already uses.
+    {
+        const auto hasValueForId = [&incoming] (const juce::String& paramId)
+        {
+            for (const auto& child : incoming)
+                if (child.hasType ("PARAM")
+                    && child.getProperty ("id").toString() == paramId
+                    && child.hasProperty ("value"))
+                    return true;
+
+            return false;
+        };
+
+        for (auto* parameter : getParameters())
+            if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+                if (! hasValueForId (ranged->paramID))
+                    ranged->setValueNotifyingHost (ranged->getDefaultValue());
+    }
+
+    apvts.replaceState (incoming);
 }
 
 //==============================================================================

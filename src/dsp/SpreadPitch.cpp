@@ -4,7 +4,7 @@ namespace
 {
     float centsToRatio (float cents) noexcept
     {
-        return std::pow (2.0f, cents / 1200.0f);
+        return std::exp2 (cents / 1200.0f);
     }
 }
 
@@ -14,13 +14,9 @@ void SpreadPitch::Voice::prepare (const juce::dsp::ProcessSpec& monoSpec, float 
     delayLine.prepare (monoSpec);
 }
 
-void SpreadPitch::Voice::reset (float baseMs, double sr)
+void SpreadPitch::Voice::reset (float baseSamples, float grainSamples)
 {
-    baseDelayMs = baseMs;
     delayLine.reset();
-
-    const auto baseSamples = static_cast<float> (baseMs * 0.001 * sr);
-    const auto grainSamples = static_cast<float> (grainMs * 0.001 * sr);
 
     // The two taps start a half-grain apart, so one is always near the
     // middle of its crossfade window (full gain) while the other is near
@@ -29,9 +25,8 @@ void SpreadPitch::Voice::reset (float baseMs, double sr)
     tapDelaySamples[1] = baseSamples - grainSamples * 0.5f;
 }
 
-float SpreadPitch::Voice::processSample (float input, float grainSamples, double sr) noexcept
+float SpreadPitch::Voice::processSample (float input, float baseSamples, float grainSamples) noexcept
 {
-    const auto baseSamples = static_cast<float> (baseDelayMs * 0.001 * sr);
     const auto halfGrain = grainSamples * 0.5f;
     const auto maxDelay = static_cast<float> (delayLine.getMaximumDelayInSamples());
 
@@ -50,9 +45,13 @@ float SpreadPitch::Voice::processSample (float input, float grainSamples, double
             tapDelaySamples[tap] -= grainSamples;
 
         const auto posInGrain = juce::jlimit (0.0f, 1.0f, (tapDelaySamples[tap] - (baseSamples - halfGrain)) / grainSamples);
-        const auto gain = 0.5f * (1.0f - std::cos (juce::MathConstants<float>::twoPi * posInGrain));
 
-        const auto delayClamped = juce::jlimit (1.0f, maxDelay, tapDelaySamples[tap]);
+        // Equal-power (sin) crossfade (brief F6): with the taps half a
+        // grain apart, gain1^2 + gain2^2 == 1 - constant summed power for
+        // the decorrelated taps, minimal envelope ripple.
+        const auto gain = std::sin (juce::MathConstants<float>::pi * posInGrain);
+
+        const auto delayClamped = juce::jlimit (2.0f, maxDelay, tapDelaySamples[tap]);
         const auto updateReadPointer = tap == 1; // advance the shared write/read cursor exactly once per input sample
         outSample += delayLine.popSample (0, delayClamped, updateReadPointer) * gain;
     }
@@ -76,8 +75,24 @@ void SpreadPitch::prepare (const juce::dsp::ProcessSpec& spec)
 
     widthSmoothed.reset (sampleRate, smoothingTimeSeconds);
     widthSmoothed.setCurrentAndTargetValue (width);
+    detuneSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    detuneSmoothed.setCurrentAndTargetValue (detuneCents);
+    timeScaleSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    timeScaleSmoothed.setCurrentAndTargetValue (timeScale);
 
     reset();
+}
+
+void SpreadPitch::setDetuneCents (float cents) noexcept
+{
+    detuneCents = juce::jlimit (0.0f, 15.0f, cents);
+    detuneSmoothed.setTargetValue (detuneCents);
+}
+
+void SpreadPitch::setTimeScale (float scale) noexcept
+{
+    timeScale = juce::jlimit (0.5f, 2.0f, scale);
+    timeScaleSmoothed.setTargetValue (timeScale);
 }
 
 void SpreadPitch::setWidth (float amount01) noexcept
@@ -88,8 +103,14 @@ void SpreadPitch::setWidth (float amount01) noexcept
 
 void SpreadPitch::reset()
 {
-    voiceUp.reset (baseDelayUpMs * timeScale, sampleRate);
-    voiceDown.reset (baseDelayDownMs * timeScale, sampleRate);
+    const auto grainSamples = static_cast<float> (grainMs * 0.001 * sampleRate);
+
+    detuneSmoothed.setCurrentAndTargetValue (detuneCents);
+    timeScaleSmoothed.setCurrentAndTargetValue (timeScale);
+    widthSmoothed.setCurrentAndTargetValue (width);
+
+    voiceUp.reset (static_cast<float> (baseDelayUpMs * timeScale * 0.001 * sampleRate), grainSamples);
+    voiceDown.reset (static_cast<float> (baseDelayDownMs * timeScale * 0.001 * sampleRate), grainSamples);
 
     voiceUp.pitchRatio = centsToRatio (detuneCents);
     voiceDown.pitchRatio = centsToRatio (-detuneCents);
@@ -103,22 +124,26 @@ void SpreadPitch::process (juce::dsp::AudioBlock<float>& block) noexcept
     if (numSamples == 0 || numChannels == 0)
         return;
 
-    voiceUp.baseDelayMs = baseDelayUpMs * timeScale;
-    voiceDown.baseDelayMs = baseDelayDownMs * timeScale;
-    voiceUp.pitchRatio = centsToRatio (detuneCents);
-    voiceDown.pitchRatio = centsToRatio (-detuneCents);
-
     const auto grainSamples = static_cast<float> (grainMs * 0.001 * sampleRate);
+    const auto samplesPerMsUp = static_cast<float> (baseDelayUpMs * 0.001 * sampleRate);
+    const auto samplesPerMsDown = static_cast<float> (baseDelayDownMs * 0.001 * sampleRate);
 
     auto* left = block.getChannelPointer (0);
     auto* right = numChannels > 1 ? block.getChannelPointer (1) : nullptr;
 
     for (size_t sample = 0; sample < numSamples; ++sample)
     {
+        // Per-sample smoothed detune/timeScale (brief F6 - no block steps).
+        const auto detuneNow = detuneSmoothed.getNextValue();
+        const auto timeScaleNow = timeScaleSmoothed.getNextValue();
+
+        voiceUp.pitchRatio = centsToRatio (detuneNow);
+        voiceDown.pitchRatio = centsToRatio (-detuneNow);
+
         const auto monoInput = right != nullptr ? 0.5f * (left[sample] + right[sample]) : left[sample];
 
-        const auto up = voiceUp.processSample (monoInput, grainSamples, sampleRate);
-        const auto down = voiceDown.processSample (monoInput, grainSamples, sampleRate);
+        const auto up = voiceUp.processSample (monoInput, samplesPerMsUp * timeScaleNow, grainSamples);
+        const auto down = voiceDown.processSample (monoInput, samplesPerMsDown * timeScaleNow, grainSamples);
 
         const auto widthNow = juce::jlimit (0.0f, 1.0f, widthSmoothed.getNextValue());
         const auto centre = 0.5f * (up + down);

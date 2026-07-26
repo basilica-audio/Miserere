@@ -10,7 +10,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment ta
 # here at the top level avoids it being enabled implicitly deeper inside
 # JUCE's CMake helpers, which has been observed to break Ninja's generate
 # step (missing CMAKE_C_COMPILE_OBJECT rule variable).
-project(Miserere VERSION 0.4.0 LANGUAGES C CXX)
+project(Miserere VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,6 +76,8 @@ juce_add_binary_data(MiserereBinaryData SOURCES
     presets/factory/roughMixGlue.json
     presets/factory/whisperThicken.json
     presets/factory/aggressiveRockVocal.json
+    presets/factory/tapeSlap75.json
+    presets/factory/wornSlap.json
     resources/i18n/de.txt
 )
 
@@ -148,6 +150,9 @@ target_link_libraries(Tests PRIVATE SharedCode Catch2::Catch2)
 target_compile_definitions(Tests PRIVATE
     $<TARGET_PROPERTY:Miserere,COMPILE_DEFINITIONS>
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # Checked-in test assets (e.g. the v0.4.0 state-migration fixture,
+    # tests/fixtures/state_v0_4_0.xml - see StateTests.cpp).
+    MSRR_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
 
 set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)

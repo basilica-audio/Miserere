@@ -1,9 +1,12 @@
 #pragma once
 
+#include "AdaaSaturator.h"
 #include "RealtimeCoefficients.h"
 #include "TapeSaturator.h"
 
 #include <juce_dsp/juce_dsp.h>
+
+#include <vector>
 
 // Bus A's tape-style saturation stage: drive 0-24 dB into tanh with a
 // pre-emphasis/de-emphasis shelf pair, auto-compensated (brief).
@@ -34,11 +37,13 @@
 // approaches the identity for signals around the nominal level (see
 // TapeSaturator.h).
 //
-// Minimum-phase IIR shelves + a memoryless nonlinearity: zero added latency,
-// keeping Bus A sample-aligned per the parallel-bus phase discipline. No
-// oversampling in M1 - at vocal-level drive amounts the tanh curve's
-// aliasing products sit well below the program material; an oversampled
-// upgrade is an M2+ voicing decision (see docs/architecture.md).
+// Minimum-phase IIR shelves + a memoryless-curve nonlinearity rendered via
+// residual-form ADAA1 (v0.5.0, brief F1 - see AdaaSaturator.h): the linear
+// component k*x stays exactly sample-aligned and droop-free while the
+// distortion residual is antiderivative-anti-aliased, so Bus A keeps its
+// zero-latency, sample-aligned phase discipline AND its alias floor drops by
+// the published ADAA1 10-20 dB (tests/AliasingTests.cpp) - still no
+// oversampling anywhere (ADR 0003 zero-latency invariant).
 class TapeSat
 {
 public:
@@ -64,6 +69,10 @@ private:
 
     Duplicator preEmphasis { msrr::makeIdentityBiquad() };
     Duplicator deEmphasis { msrr::makeIdentityBiquad() };
+
+    // Per-channel residual-form ADAA state for the shared TapeSaturator
+    // curve (allocated in prepare(), never on the audio thread).
+    std::vector<msrr::adaa::TanhStage> saturators;
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> driveDbSmoothed;
     float lastDriveDb = 6.0f;

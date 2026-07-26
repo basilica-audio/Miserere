@@ -67,11 +67,18 @@ switches between All-Buttons and a softer, fixed 2:1 **Gentle** voicing. This bu
 sound "terrible" soloed (use Audition) and good blended in.
 
 CRUSH also carries a touch of program-dependent colour: as gain reduction builds, a
-class-A-style asymmetric harmonic and a transformer-style low-frequency saturation blend in on
-top of the limiter's own detector-ripple character — negligible at light settings, staying
-under roughly 0.5% distortion at moderate gain reduction, and growing only as the bus works
-harder. A clean, barely-compressed signal is unaffected; lean on Input and Audition to hear it
-come alive.
+transformer-style low-frequency saturation and the FET cell's own residual second harmonic
+blend in on top of the limiter's detector-ripple character — negligible at light settings and
+growing only as the bus works harder. A clean, barely-compressed signal is unaffected; lean on
+Input and Audition to hear it come alive.
+
+Since v0.5.0 none of the above is tabulated. The detector is a real feedback loop: the
+sidechain is driven from the bus output through a single-capacitor RC network with Attack in
+the charge path and Release in the discharge path, which is why the behaviours this style of
+limiter is known for now simply happen rather than being scripted — the effective ratio rises
+as a note is held, the Release setting audibly changes how fast the attack arrives, the knee
+tightens as you go up the ratio row, and ALL overshoots before settling. ALL is its own
+setting, not an interpolation between the numbered ratios.
 
 ### ② SANDWICH — Passive EQ → Opto Leveler → Passive EQ
 
@@ -79,13 +86,25 @@ Two independent Passive EQ instances bracket an opto-style leveler. Each Passive
 shared-frequency LF **Boost** and **Cut** (both can run at once — a deliberately
 non-cancelling curve, not a simple sum to flat), an HF **Bell Boost** with variable
 bandwidth, and an HF **Shelf Atten**. The Opto Leveler has no threshold: **Peak Reduction**
-drives into a fixed static curve (soft ~3:1 below −20 dB, hard ceiling above; **Limit**
-tightens the soft region toward ~10:1), with a raw-audio detector (no smoothing ahead of the
-ballistics) and a two-stage release whose tail lengthens the longer it has been working.
+drives the cell harder, with **Limit** tightening the compression toward limiting.
 **Emphasis** makes the detector progressively HF-selective (up to −10 dB less LF
 sensitivity), so at high settings it reacts mostly to sibilance/presence, "like a
 multiband". **Residual** (default on) keeps the Passive EQ's small, never-fully-flat vintage
 tilt; defeat it for a cleaner EQ.
+
+Since v0.5.0 the leveler is a photocell model rather than a set of drawn curves. The
+compression ratio, the two-stage release (a quick initial recovery followed by a long tail),
+the memory effect — hold it down longer or harder and it lets go more slowly — and the
+program-dependent attack are all consequences of how charge carriers in the cell build up and
+drain away. There is no ratio control because there is no ratio parameter in the circuit;
+what you hear is the cell's own behaviour, which is the whole appeal of this style of leveler.
+
+The LF Boost and Cut network is likewise now the hardware ladder's exact response. Two
+practical consequences: running Boost and Cut together gives the classic low-end shape (a lift
+underneath with a dip just above it) because the cut corner genuinely sits above the boost
+corner, and the Cut on its own is broad — at full attenuation on the 100 Hz setting it is
+still about 1.6 dB down at 2 kHz. That breadth is the circuit's, not a bug; it is why the
+control is normally used against the Boost rather than alone.
 
 ### ③ SPREAD — dual micro-pitch
 
@@ -98,10 +117,26 @@ blends from a fully centred sum (0%) to the full hard pan (100%).
 
 **Time** (50–160 ms, default 110 ms, plain milliseconds — deliberately not tempo-synced).
 Feedback is fixed at 0 in v2: there is exactly one repeat, and its darkness comes from a
-built-in bucket-brigade-style voicing (**Tone** sweeps a progressive HF loss plus soft
-saturation baked into that single repeat) rather than a filtered feedback loop. **Stereo**
-switches from the default mono return (the classic mono slap behind a stereo-widened vocal)
-to independent L/R delays.
+built-in tape-style voicing (**Tone** sweeps a progressive HF loss plus soft saturation baked
+into that single repeat) rather than a filtered feedback loop. **Stereo** switches from the
+default mono return (the classic mono slap behind a stereo-widened vocal) to independent L/R
+delays.
+
+Since v0.5.0 the repeat is voiced as an actual tape transport rather than a filtered delay:
+the saturation now sits on the record side (ahead of the delay write) instead of being lumped
+onto the tap, which is why repeats and input no longer brighten together, and a fixed head
+bump adds a small low-mid lift.
+
+**Wobble** (default 0%) is the transport's wow and flutter — a slow pinch-roller waver, a
+faster capstan flutter, and a slow random drift, each wandering independently so it never
+settles into an obviously repeating pattern. The dial spans roughly 0 to 0.5% wow-and-flutter;
+small amounts (10–25%) read as "this was on tape" without sounding broken, and high settings
+get seasick on purpose. At 0 the modulation is genuinely switched off, not merely turned down.
+
+**Age** (default 0%) is tape wear: hiss with an asperity component that rides the signal (the
+noise breathing with the vocal is most of what makes it read as tape rather than as added
+hiss), plus extra head-to-tape spacing loss that dulls the repeat further as the dial rises.
+It affects only the SLAP return, never the direct path. At 0 nothing is generated at all.
 
 ## Fader logic
 
@@ -143,8 +178,35 @@ zip preset banks.
    gone when you mute it" test — if either is audible as a discrete effect, pull it back.
 5. Use **Parallel** to back the whole layer off quickly on quieter/more organic material.
 
-## Known limitations (v0.3.0)
+## Latency and aliasing (v0.5.0)
 
+Miserere reports and adds **0 samples of latency**, at every sample rate and with every
+section engaged. That is a deliberate constraint, not an oversight: the four return busses are
+summed against a bit-transparent direct path, so anything that delayed one bus by even a
+fraction of a sample would comb the sum.
+
+Keeping that promise rules out oversampling, which is how most plugins tame the aliasing that
+saturation produces. Instead every drive stage here computes its distortion in a form that
+suppresses aliasing arithmetically, split so that the clean part of the signal passes through
+exactly aligned and untouched — no delay, and no high-frequency dulling at 44.1 kHz.
+
+What that buys, measured at 44.1 kHz: on a programme-realistic probe (a 3 kHz tone at
+−12 dBFS through hot-but-musical drive settings) non-harmonic content sits at or below
+−60 dBFS. Pushed to deliberately unrealistic extremes — a full-scale 12 kHz tone into maximum
+drive — the treatment still removes at least 12 dB of aliasing versus the untreated curve, but
+no absolute floor is claimed there, and you should not expect one from any zero-latency
+design. If you want a saturated 12 kHz sine at full scale to stay clean, that is what
+oversampling is for, and it costs latency.
+
+## Known limitations
+
+- SPREAD's pitch shifter crossfades two taps of one delay line held a fixed distance apart, so
+  a sustained pure tone (a synth or a very steady held vowel) meets a mild comb whose depth
+  depends on the note. On real programme material this is inaudible; a smarter splice is on
+  the roadmap.
+- After a long silence the SANDWICH bus settles around −150 dBFS instead of true digital
+  silence — roughly 30 dB below the smallest value a 24-bit file can hold. Every other bus
+  reaches exact zero.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
