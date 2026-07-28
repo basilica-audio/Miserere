@@ -230,6 +230,78 @@ TEST_CASE ("Passive EQ: LF cut alone attenuates below its corner and returns to 
 }
 
 //==============================================================================
+// One LF pot at exactly 0 leaves a single reactive element, i.e. a genuinely
+// first-order ladder. Running that through the 2nd-order bilinear transform
+// is algebraically valid but numerically not: it plants a pole AND a zero
+// exactly at Nyquist which are supposed to cancel, and float-rounded
+// coefficients do not cancel them. What survives is a z = -1 mode sitting on
+// the unit circle - measured radius 0.99999998 for the boost-only shape and
+// 1.00000002 (i.e. marginally UNSTABLE) for the cut-only one - so it rings at
+// Nyquist indefinitely instead of decaying. Both shipped SANDWICH defaults
+// drive exactly one pot per PassiveEq instance, which is where that bus's
+// ~3e-7 resting residue came from (the system-level guard lives in
+// tests/RobustnessTests.cpp; this pins the root cause per shape).
+
+TEST_CASE ("Passive EQ: a single-pot LF setting decays to exact zero", "[dsp][passiveeq][denormal]")
+{
+    const auto restingPeakAfterBurst = [] (float boostDial, float cutDial)
+    {
+        PassiveEq eq;
+        eq.setLfFreqHz (100.0f);
+        eq.setLfBoostDial (boostDial);
+        eq.setLfCutDial (cutDial);
+        eq.setResidualEnabled (false); // isolate the LF ladder
+        eq.prepare (makeTestSpec (1));
+
+        juce::AudioBuffer<float> buffer (1, testBlockSize);
+
+        // ScopedNoDenormals because that is what the audio thread actually
+        // runs under (PluginProcessor::processBlock) - without flush-to-zero
+        // an IIR tail parks on a denormal rather than reaching zero, which
+        // is a separate (and here uninteresting) property. The residue this
+        // test guards was ~3e-7, a normal float FTZ cannot hide.
+        //
+        // NB the AudioBlock is rebuilt per call, exactly as processBlock()
+        // does it. Hoisting it out of the loop would cache the write
+        // pointers once, leaving AudioBuffer::isClear stuck true so that
+        // every later clear() silently no-ops and the filter is fed its own
+        // previous output - a self-amplifying loop, not a DSP fault.
+        const auto processBuffer = [&eq, &buffer]
+        {
+            juce::ScopedNoDenormals noDenormals;
+            juce::dsp::AudioBlock<float> block (buffer);
+            eq.process (block);
+        };
+
+        // One second of hot programme to excite every mode the ladder has...
+        TestHelpers::fillWithSine (buffer, testSampleRate, 110.0, 0.9f);
+        processBuffer();
+
+        // ... then ten seconds of silence to decay in.
+        for (int second = 0; second < 10; ++second)
+        {
+            buffer.clear();
+            processBuffer();
+        }
+
+        return TestHelpers::peakAbsolute (buffer);
+    };
+
+    // The two degenerate shapes - the SANDWICH pre (cut only) and post
+    // (boost only) defaults.
+    CHECK (restingPeakAfterBurst (0.0f, 3.6f) == 0.0f);
+    CHECK (restingPeakAfterBurst (3.5f, 0.0f) == 0.0f);
+
+    // Control: both pots engaged takes the non-degenerate 2nd-order path,
+    // which never had the parasitic pole. It settles at ~1e-37 rather than
+    // exactly zero - an ordinary IIR limit cycle right at the denormal
+    // boundary, i.e. around -738 dBFS. The bound is deliberately far below
+    // the ~3e-7 the Nyquist pole produced: it distinguishes "arithmetic
+    // noise floor" from "a mode that does not decay".
+    CHECK (restingPeakAfterBurst (10.0f, 10.0f) < 1.0e-30f);
+}
+
+//==============================================================================
 // 6.2 - decramping: 16 kHz bell at full sharp boost at 44.1 kHz peaks
 // within +-4 % of the analog target (fails with the old bilinear/RBJ
 // rendering - the digital peak got pulled and its upper skirt squeezed).

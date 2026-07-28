@@ -89,6 +89,28 @@ std::array<float, 6> PassiveEq::computeLfNetworkCoefficients (double rBoostOhm, 
     const auto K = 2.0 * sampleRate;
     const auto K2 = K * K;
 
+    // ONE POT AT EXACTLY 0 IS A FIRST-ORDER NETWORK, and must be transformed
+    // as one. Both quadratic terms carry the factor a*b (n2 = r3*rsh*a*b;
+    // den2 = a*b*(rs1*(rsh+r23) + rsh*r23)), so a single reactive element
+    // remains as soon as either pot sits at its stop. Feeding that degenerate
+    // quadratic through the 2nd-order transform below is algebraically valid
+    // but numerically not: numerator and denominator then BOTH factor as
+    // (z+1)*(first order), i.e. a pole and a zero exactly at Nyquist that are
+    // supposed to cancel. Rounded to float they no longer do, and what
+    // survives is a marginally-stable z = -1 mode - it rings at Nyquist
+    // forever once excited instead of decaying (this is the SANDWICH bus's
+    // ~3e-7 resting residue; both shipped defaults drive exactly one LF pot
+    // per PassiveEq instance, so both hit it). Dividing the (z+1) out
+    // analytically - which is all the branch below does - gives the identical
+    // response with no pole at Nyquist to leak.
+    if (a == 0.0 || b == 0.0)
+        return { static_cast<float> (makeup * (n1 * K + n0)),
+                 static_cast<float> (makeup * (n0 - n1 * K)),
+                 0.0f,
+                 static_cast<float> (den1 * K + den0),
+                 static_cast<float> (den0 - den1 * K),
+                 0.0f };
+
     const auto b0 = makeup * (n2 * K2 + n1 * K + n0);
     const auto b1 = makeup * (2.0 * (n0 - n2 * K2));
     const auto b2 = makeup * (n2 * K2 - n1 * K + n0);

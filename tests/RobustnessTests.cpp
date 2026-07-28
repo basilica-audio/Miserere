@@ -485,15 +485,13 @@ TEST_CASE ("Feedback engines: a long silence decays to rest with no denormal res
         processor.processBlock (buffer, midi);
     }
 
-    // Summed across every bus with both direct drive stages hot, the resting
-    // output must sit below a 24-bit LSB - i.e. no state has parked anywhere
-    // that could be heard or that could cost denormal CPU.
-    //
-    // Measured on this build the residue is ~3e-7 (-130 dBFS), and it is
-    // traced to the SANDWICH bus chain, NOT to the engines this release
-    // added: per the per-bus assertion below, CRUSH (F3), SPREAD (F6), SLAP
-    // (F5) and the direct path (F8/F2) each reach EXACT zero.
-    CHECK (TestHelpers::peakAbsolute (buffer) < 1.0e-6f);
+    // Summed across every bus with both direct drive stages hot, the
+    // resting output must be EXACT zero - no state has parked anywhere that
+    // could be heard or that could cost denormal CPU. (A previous build
+    // rested at ~3e-7: the PassiveEq LF ladder's degenerate single-pot
+    // bilinear transform left a parasitic pole exactly at Nyquist - see
+    // PassiveEq::computeLfNetworkCoefficients.)
+    CHECK (TestHelpers::peakAbsolute (buffer) == 0.0f);
 
     // ... and the engine wakes up again cleanly.
     TestHelpers::fillWithSine (buffer, sampleRate, 440.0, 0.5f);
@@ -552,19 +550,18 @@ TEST_CASE ("Feedback engines: each v0.5.0 bus rests at exactly zero after a long
         return TestHelpers::peakAbsolute (buffer);
     };
 
-    for (const auto* bus : { ParamIDs::crushLevel, ParamIDs::spreadLevel, ParamIDs::slapLevel })
+    // SANDWICH included: its historic ~3e-8 static residue was the PassiveEq
+    // LF ladder's degenerate single-pot bilinear transform sustaining a
+    // parasitic pole exactly at z = -1 (both shipped defaults drive exactly
+    // one pot per instance) - fixed in
+    // PassiveEq::computeLfNetworkCoefficients, so it now rests at exact zero
+    // like the other three.
+    for (const auto* bus : { ParamIDs::crushLevel, ParamIDs::sandLevel,
+                             ParamIDs::spreadLevel, ParamIDs::slapLevel })
     {
         INFO ("bus fader id = " << bus);
         CHECK (restingPeakOf (bus) == 0.0f);
     }
-
-    // Known deviation, deliberately pinned rather than hidden: the SANDWICH
-    // chain settles to a static ~3e-8 (-150 dBFS, roughly 30 dB below a
-    // 24-bit LSB) instead of exact zero. PassiveEq and OptoLeveler each reach
-    // zero in isolation, so this comes from the bus composition and predates
-    // the F4 carrier ODE. Tracked as a follow-up; pinned here so it cannot
-    // grow unnoticed.
-    CHECK (restingPeakOf (ParamIDs::sandLevel) < 1.0e-6f);
 }
 
 // NaN/Inf must not be able to park a carrier density or an RC cap voltage in
