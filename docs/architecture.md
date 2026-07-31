@@ -277,6 +277,21 @@ cut necessarily places its zero and pole a decade apart, so the LF Cut is genuin
 (about 1.6 dB still showing at 2 kHz at full cut on the 100 Hz selector). That is the
 hardware's behaviour and the tests now pin it as such.
 
+That ladder is second-order only while both LF pots are off their stops. Both quadratic
+coefficients carry the factor `R_cut*C_lo1 * R_boost*C_lo2`, so a pot at exactly 0 removes one
+reactive element and leaves a genuinely first-order network - which is the normal case, not an
+edge case: each shipped instance drives exactly one pot (Sand Pre cuts, Sand Post boosts).
+Transforming the degenerate quadratic at second order regardless is algebraically valid but
+numerically not, because numerator and denominator then both factor as `(z+1)*(first order)`:
+a pole and a zero exactly at Nyquist that are supposed to cancel and, once rounded to float,
+no longer do. What survives is a `z = -1` mode sitting on the unit circle (measured radius
+0.99999998 boost-only, 1.00000002 cut-only) that rings forever once excited - the SANDWICH
+bus's ~3e-7 resting floor. `computeLfNetworkCoefficients` therefore divides the `(z+1)` out
+analytically and emits the first-order transform with exact-zero second-order coefficients.
+Responses agree with the previous rendering to within 2e-6 dB over 10 Hz-23 kHz, and the bus
+now rests at exact zero like the other three. Note the recurrence: this is the same undamped
+Nyquist pole the iron integrator below had to be discretised around.
+
 ### Console EQ drive: flux-domain iron
 
 The ad-hoc squared even-harmonic term is replaced by a transformer model: a leaky flux
