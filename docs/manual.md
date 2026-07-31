@@ -129,6 +129,15 @@ read was losing; the grain crossfade is longer and equal-power, which measurably
 periodic level ripple on sustained tones; and Detune and Time are smoothed per sample, so
 automating either no longer steps at block boundaries.
 
+Since v0.6.0 the splice is period-adaptive: a pitch tracker (autocorrelation on a lowpassed,
+decimated copy of the input — a few percent of the bus's CPU) watches the material, and when
+it is confidently pitched, the spacing between each shifter's two crossfading taps snaps to a
+multiple of the note's period while the crossfade law shifts to amplitude-complementary. Both
+taps then reinforce at every harmonic instead of interfering, which removes the note-dependent
+level ripple sustained tones used to meet (see Known limitations). Unpitched material leaves
+the tracker below its confidence gate and passes through the identical v0.5.0 path. The
+tracker only ever reads signal history — reported latency stays 0.
+
 ### ④ SLAP — single-repeat dark delay
 
 **Time** (50–160 ms, default 110 ms, plain milliseconds — deliberately not tempo-synced).
@@ -220,10 +229,14 @@ oversampling is for, and it costs latency.
 
 ## Known limitations
 
-- SPREAD's pitch shifter crossfades two taps of one delay line held a fixed distance apart, so
-  a sustained pure tone (a synth or a very steady held vowel) meets a mild comb whose depth
-  depends on the note. On real programme material this is inaudible; a smarter splice is on
-  the roadmap.
+- SPREAD's pitch shifter crossfades two taps of one delay line. Since v0.6.0 the tap spacing
+  listens to the input: on confidently pitched material (a held vowel, a synth) it snaps to a
+  multiple of the note's period so the taps reinforce instead of drawing comb luck — sustained
+  tones that previously met a note-dependent comb of up to ~18 dB envelope ripple now stay
+  within ~2 dB at any pitch. On unpitched material (consonants, breath, noise) the detector
+  stands down and the bus behaves exactly as before. Residual limits: the tracker follows the
+  lowest fundamental down to 80 Hz, and fast vibrato can outrun the ~1 s re-alignment — a brief
+  return of the old mild shimmer, which reads as natural doubling.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"

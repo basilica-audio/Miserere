@@ -231,10 +231,14 @@ TEST_CASE ("Spread: width 0 centres both voices (L == R); width 1 keeps them har
 // The historical single-frequency draws are still asserted underneath as
 // regression pins so nothing silently gets worse.
 //
-// Known limitation, deliberately not papered over: the per-frequency comb
-// itself is inherent to the two-tap topology and survives this release. The
-// fix is correlation-aligned splicing (WSOLA-style) at the grain boundary,
-// which is a roadmap item, not a v0.5.0 change.
+// The per-frequency comb described above was inherent to the two-tap
+// topology with a FIXED tap separation. Issue #19 addressed it with the
+// period-adaptive splice (see the smart-splice cases further down): the
+// separation now snaps to a multiple of the detected input period, so a
+// sustained tone's taps sum in phase instead of drawing comb luck. The two
+// cases directly below therefore pin the smart splice OFF - they measure
+// the static v0.5.0 window against the v0.4.0 golden, which is only
+// meaningful on the fixed-separation path.
 namespace
 {
     // Envelope peak-to-trough of the L output on a sustained tone: rectify +
@@ -244,6 +248,7 @@ namespace
         const int total = 1 << 18;
 
         SpreadPitch spread;
+        spread.setSmartSplice (false); // pin the fixed-separation path (see block comment)
         spread.setDetuneCents (6.0f);
         spread.setTimeScale (1.0f);
         spread.setWidth (1.0f);
@@ -473,6 +478,203 @@ TEST_CASE ("Spread: detune automation ramp is click-free (per-sample smoothing)"
 
     INFO ("max per-sample step: static = " << staticStep << ", ramped = " << rampedStep);
     CHECK (rampedStep <= staticStep * std::pow (10.0f, 0.5f / 20.0f));
+}
+
+//==============================================================================
+// Period-adaptive splice (issue #19).
+//
+// WHY THE A/B: the ripple mechanism derived above is env^2 = 1 +
+// sin(2*pi*p)*cos(2*pi*f*sep/fs) - its depth is set purely by where the
+// note's frequency lands against the tap separation. The smart splice snaps
+// the separation to a multiple of the detected input period (cos -> +1 at
+// the fundamental and EVERY harmonic) and blends the window law toward the
+// amplitude-complementary sin^2 pair, whose coherent in-phase sum is
+// constant. setSmartSplice() exposes both paths so these cases measure the
+// same build against its own pinned v0.5.0 behaviour.
+namespace
+{
+    // Envelope peak-to-trough on a sustained tone, with settle long enough
+    // for the detector + separation slew to converge (~1.4 s worst case)
+    // and analysis covering at least one full crossfade sweep cycle at
+    // 15 cents detune (~3.2 s).
+    double smartSpliceRippleDb (double frequencyHz, bool smartSplice)
+    {
+        constexpr int settleSamples = 120000; // 2.5 s
+        constexpr int analysisSamples = 168000; // 3.5 s
+        constexpr int total = settleSamples + analysisSamples;
+
+        SpreadPitch spread;
+        spread.setSmartSplice (smartSplice);
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (1.0f);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (total));
+
+        juce::AudioBuffer<float> buffer (2, total);
+        TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, 0.5f);
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+
+        const auto* data = buffer.getReadPointer (0);
+        float state = 0.0f;
+        const auto alpha = static_cast<float> (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * 80.0 / testSampleRate));
+
+        double envMin = 1.0e9, envMax = 0.0;
+
+        for (int i = 0; i < total; ++i)
+        {
+            state += alpha * (std::abs (data[i]) - state);
+
+            if (i >= settleSamples)
+            {
+                envMin = std::min (envMin, static_cast<double> (state));
+                envMax = std::max (envMax, static_cast<double> (state));
+            }
+        }
+
+        return 20.0 * std::log10 (envMax / std::max (envMin, 1.0e-12));
+    }
+}
+
+TEST_CASE ("Spread: period-adaptive splice bounds sustained-tone ripple at every probe, incl. the worst comb tooth", "[dsp][spread][quality][smartsplice]")
+{
+    // Probe set: three anti-phase teeth of the 33.3 Hz separation comb
+    // ((k+0.5)/30 ms - the deep-null frequencies), one in-phase tooth and
+    // the golden's 220 Hz. Today's pinned behaviour is note-dependent comb
+    // luck; the smart splice must flatten ALL of them below a uniform bar.
+    const double probes[] = { 6.5 / 0.030, 220.0, 7.5 / 0.030, 300.0, 9.5 / 0.030 };
+
+    std::vector<double> offDb, onDb;
+
+    for (const auto f : probes)
+    {
+        offDb.push_back (smartSpliceRippleDb (f, false));
+        onDb.push_back (smartSpliceRippleDb (f, true));
+        INFO ("f = " << f << " Hz: OFF " << offDb.back() << " dB, ON " << onDb.back() << " dB");
+
+        // Uniform bar: no note-dependence survives (the OFF path swings
+        // from ~4 dB to >18 dB across these same probes; ON measures
+        // 1.5-2.1 dB on this build - the bar leaves platform margin).
+        CHECK (onDb.back() <= 3.5);
+    }
+
+    const auto maxOff = *std::max_element (offDb.begin(), offDb.end());
+    const auto maxOn = *std::max_element (onDb.begin(), onDb.end());
+
+    INFO ("worst probe: OFF " << maxOff << " dB, ON " << maxOn << " dB");
+
+    // The anti-phase teeth must show the pinned pathology (this is what
+    // makes the A/B meaningful) and the smart splice must collapse it.
+    CHECK (maxOff >= 15.0);
+    CHECK (maxOn <= maxOff - 10.0);
+}
+
+TEST_CASE ("Spread: smart splice never engages on non-periodic treble-band material", "[dsp][spread][quality][smartsplice]")
+{
+    // Consonant/breath proxy: deterministic white noise double-differenced
+    // (~12 dB/oct highpass hinged at Nyquist) so essentially no energy
+    // reaches the detector's ~1.2 kHz lowpass. Both the NACF confidence and
+    // the spectral plausibility gate must hold the smart path on the
+    // nominal separation - output identical to the pinned v0.5.0 path.
+    const auto render = [] (bool smartSplice)
+    {
+        constexpr int total = 96000;
+
+        SpreadPitch spread;
+        spread.setSmartSplice (smartSplice);
+        spread.setDetuneCents (10.0f);
+        spread.setTimeScale (1.0f);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (total));
+
+        juce::AudioBuffer<float> buffer (2, total);
+        juce::Random rng (42);
+        float w1 = 0.0f, w2 = 0.0f;
+
+        for (int i = 0; i < total; ++i)
+        {
+            const auto w = rng.nextFloat() * 2.0f - 1.0f;
+            const auto sample = 0.25f * (w - 2.0f * w1 + w2);
+            w2 = w1;
+            w1 = w;
+            buffer.setSample (0, i, sample);
+            buffer.setSample (1, i, sample);
+        }
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+        return buffer;
+    };
+
+    const auto off = render (false);
+    const auto on = render (true);
+
+    double maxAbsDiff = 0.0;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const auto* a = off.getReadPointer (ch);
+        const auto* b = on.getReadPointer (ch);
+
+        for (int i = 0; i < off.getNumSamples(); ++i)
+            maxAbsDiff = std::max (maxAbsDiff, static_cast<double> (std::abs (a[i] - b[i])));
+    }
+
+    INFO ("max |ON - OFF| on treble-band noise = " << maxAbsDiff);
+    CHECK (maxAbsDiff < 1.0e-6);
+}
+
+TEST_CASE ("Spread: reset() restores the smart-splice state machine exactly", "[dsp][spread][reset][smartsplice]")
+{
+    // Drive the detector hard (2 s of a snapping tone), reset, then process
+    // a fresh probe: the output must match a factory-fresh instance sample
+    // for sample - reset() clearing ALL new state is a suite-wide guardrail
+    // (separation, detector ring, sweep machine, smoothers).
+    constexpr int primeSamples = 96000;
+    constexpr int probeSamples = 48000;
+
+    SpreadPitch used;
+    used.setDetuneCents (6.0f);
+    used.setTimeScale (1.0f);
+    used.setWidth (1.0f);
+    used.prepare (makeMonoInputSpec (primeSamples));
+
+    juce::AudioBuffer<float> prime (2, primeSamples);
+    TestHelpers::fillWithSine (prime, testSampleRate, 220.0, 0.5f);
+    juce::dsp::AudioBlock<float> primeBlock (prime);
+    used.process (primeBlock);
+
+    used.reset();
+
+    SpreadPitch fresh;
+    fresh.setDetuneCents (6.0f);
+    fresh.setTimeScale (1.0f);
+    fresh.setWidth (1.0f);
+    fresh.prepare (makeMonoInputSpec (primeSamples));
+
+    juce::AudioBuffer<float> probeA (2, probeSamples);
+    TestHelpers::fillWithSine (probeA, testSampleRate, 220.0, 0.5f);
+    juce::AudioBuffer<float> probeB;
+    probeB.makeCopyOf (probeA);
+
+    juce::dsp::AudioBlock<float> blockA (probeA);
+    juce::dsp::AudioBlock<float> blockB (probeB);
+    used.process (blockA);
+    fresh.process (blockB);
+
+    double maxAbsDiff = 0.0;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const auto* a = probeA.getReadPointer (ch);
+        const auto* b = probeB.getReadPointer (ch);
+
+        for (int i = 0; i < probeSamples; ++i)
+            maxAbsDiff = std::max (maxAbsDiff, static_cast<double> (std::abs (a[i] - b[i])));
+    }
+
+    INFO ("max |after-reset - fresh| = " << maxAbsDiff);
+    CHECK (maxAbsDiff < 1.0e-7);
 }
 
 TEST_CASE ("Spread: reset() clears both micro-pitch delay lines", "[dsp][spread][reset]")
