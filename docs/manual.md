@@ -224,9 +224,6 @@ oversampling is for, and it costs latency.
   a sustained pure tone (a synth or a very steady held vowel) meets a mild comb whose depth
   depends on the note. On real programme material this is inaudible; a smarter splice is on
   the roadmap.
-- After a long silence the SANDWICH bus settles around −150 dBFS instead of true digital
-  silence — roughly 30 dB below the smallest value a 24-bit file can hold. Every other bus
-  reaches exact zero.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
