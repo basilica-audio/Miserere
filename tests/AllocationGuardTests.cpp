@@ -5,6 +5,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <new>
+
 // Real-time-safety guarantee: processBlock() must not touch the heap once
 // prepareToPlay() has completed (docs/architecture.md, CLAUDE.md). Exercises
 // every module by bringing all four busses up (including the Slap/Spread
@@ -27,6 +29,64 @@ namespace
         setParam (processor, ParamIDs::sandPeakRed, 60.0f);
         setParam (processor, ParamIDs::crushInput, 12.0f);
     }
+}
+
+//==============================================================================
+// Suite-wide hardening wave (2026-07-31): AllocationGuard's own mechanism was
+// never self-verified anywhere in this file (or elsewhere in the suite) -
+// every TEST_CASE below only ever checks `allocationCount() == 0`, which
+// would read exactly the same whether the guard is genuinely observing zero
+// allocations or has been silently broken (e.g. by a future edit to the
+// replaced operator new in AllocationGuard.h). This closes that gap.
+//
+// The canary allocation deliberately goes through a direct call to
+// ::operator new, not a `new`/`delete` expression. [expr.new] explicitly
+// permits an implementation to omit the allocation of a new-expression
+// whose storage is never observably used, and Clang/MSVC do exactly that at
+// higher optimisation levels - the exact defect class already found and
+// fixed in sibling plugins (Requiem's tests/EngineTests.cpp:481). A direct
+// ::operator new call is a plain function call, so that elision permission
+// does not apply, and the volatile write forces the returned storage to be
+// observably used. The assertion itself reads allocationCount() only after
+// the allocate/deallocate pair has fully completed, rather than from inside
+// a Catch2 CHECK()/REQUIRE() invocation - sibling repos found that Catch2's
+// own assertion macros are not guaranteed allocation-free, which would
+// otherwise pollute the very count this test exists to verify.
+TEST_CASE ("AllocationGuard: the guard itself fires on ordinary heap allocations "
+           "and stays silent on pure stack/register arithmetic",
+           "[robustness][realtime][allocation][self-test]")
+{
+    AllocationGuard::reset();
+
+    std::size_t countAfterAllocation = 0;
+
+    {
+        AllocationGuard::Scope scope;
+
+        auto* deliberate = static_cast<int*> (::operator new (sizeof (int)));
+        *static_cast<volatile int*> (deliberate) = 7;
+        ::operator delete (deliberate);
+
+        countAfterAllocation = AllocationGuard::allocationCount();
+    }
+
+    CHECK (countAfterAllocation >= 1);
+
+    AllocationGuard::reset();
+
+    std::size_t countAfterArithmetic = 0;
+
+    {
+        AllocationGuard::Scope scope;
+        volatile auto sum = 0.0f;
+
+        for (int i = 0; i < 1000; ++i)
+            sum = sum + static_cast<float> (i);
+
+        countAfterArithmetic = AllocationGuard::allocationCount();
+    }
+
+    CHECK (countAfterArithmetic == 0);
 }
 
 TEST_CASE ("processBlock() performs zero heap allocations once prepared", "[robustness][realtime][allocation]")
