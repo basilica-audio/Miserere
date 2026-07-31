@@ -1,4 +1,4 @@
-# Miserere — user manual (v0.3.0)
+# Miserere — user manual (v0.5.0)
 
 *Four voices, one prayer — the parallel vocal template in a single unit.*
 
@@ -45,11 +45,21 @@ Off by default, section by section, in signal order:
 - **FET Comp** — a light, threshold-based FET-style compressor, fixed 4:1, aiming for a
   gentle 3–4 dB of peak gain reduction — "the one place serial compression is authentic" in
   this topology.
-- **Console EQ** — a 1073-class grid: HPF (18 dB/oct, 50/80/160/300 Hz), low shelf (±16 dB,
-  35/60/110/220 Hz), a fixed-Q mid bell (±18 dB, six stepped centre frequencies), a fixed
-  12 kHz high shelf (±16 dB), and a Drive control blending subtle 2nd/3rd-leaning
+- **Console EQ** — a British-console-class grid: HPF (18 dB/oct, 50/80/160/300 Hz), low shelf
+  (±16 dB, 35/60/110/220 Hz), a fixed-Q mid bell (±18 dB, six stepped centre frequencies), a
+  fixed 12 kHz high shelf (±16 dB), and a Drive control blending subtle 2nd/3rd-leaning
   transformer-style harmonics.
-- **Sat** — the tape-style saturator retained from v1, an optional "grit" stage.
+
+  Since v0.5.0 the Drive is a transformer model rather than an added harmonic term: the
+  signal runs through a flux integrator into a biased saturator and back out through that
+  integrator's exact inverse. Because magnetic flux scales as voltage over frequency, the
+  third harmonic rises toward the bass on its own (measured +12 dB going from 100 Hz to
+  50 Hz) instead of being weighted by hand. At 0 dB the Drive is a bit-exact bypass. The
+  12 kHz shelf is also magnitude-matched since v0.5.0, so at 44.1 kHz it keeps its analog
+  shape in the top octave instead of being squeezed toward Nyquist.
+- **Sat** — the tape-style saturator retained from v1, an optional "grit" stage. Since v0.5.0
+  it computes its distortion in the alias-suppressing form described under *Latency and
+  aliasing* below; at 0 dB drive it is still a bit-exact bypass.
 - **De-Ess Post** — a second de-esser instance at the end of the chain, for sibilance that
   compression or EQ brought up.
 
@@ -57,12 +67,12 @@ Off by default, section by section, in signal order:
 
 ### ① CRUSH — FET limiter, all-buttons character
 
-No threshold knob: **Input** drives the signal into a fixed per-ratio threshold/knee table.
+No threshold knob: **Input** drives the signal into a fixed per-ratio threshold and knee.
 **Ratio** selects 4:1/8:1/12:1/20:1/ALL (ALL is a plateau-shaped curve with a deliberate
 give-back and a short attack lag that lets transients punch through before clamping — the
 "snap"). **Attack**/**Release** are 1–7 dials where a HIGHER number is FASTER, matching the
-hardware convention this is modelled on; release is dual-rate and program-dependent (fast
-after brief transients, several times slower after sustained heavy compression). **Style**
+hardware convention this is modelled on; release is program-dependent (fast after brief
+transients, several times slower after sustained heavy compression). **Style**
 switches between All-Buttons and a softer, fixed 2:1 **Gentle** voicing. This bus is meant to
 sound "terrible" soloed (use Audition) and good blended in.
 
@@ -113,6 +123,12 @@ sets the pitch offset in cents (default 6 — deliberately small, so the ear rea
 the outside" rather than chorusing). **Time** scales both base delays together; **Width**
 blends from a fully centred sum (0%) to the full hard pan (100%).
 
+Since v0.5.0 both shifter delay lines are read with third-order Lagrange interpolation instead
+of a linear read, which recovers 0.90 dB of high-frequency content at 10 kHz that the linear
+read was losing; the grain crossfade is longer and equal-power, which measurably lowers the
+periodic level ripple on sustained tones; and Detune and Time are smoothed per sample, so
+automating either no longer steps at block boundaries.
+
 ### ④ SLAP — single-repeat dark delay
 
 **Time** (50–160 ms, default 110 ms, plain milliseconds — deliberately not tempo-synced).
@@ -147,6 +163,9 @@ It affects only the SLAP return, never the direct path. At 0 nothing is generate
   deliberately not called "Solo": the technique's whole point is that these busses should
   never be *judged* in isolation, only used to double-check what they are doing.
 - **Mute wins over Audition** on the same bus, console-style.
+- **Mute and Audition do not click.** Since v0.5.0 the bus routing rides a 3 ms ramp instead
+  of switching hard between on and off. The ramp lands on exact values, so a muted bus still
+  contributes digital silence — exact zeros, not "very quiet" — once it has settled.
 - **Link** (default off) makes the Crush and Sandwich detectors track a combined L/R signal
   instead of each channel independently — "dual mono" (unlinked) is the documented default
   behaviour for this style of processing.
@@ -157,8 +176,9 @@ It affects only the SLAP return, never the direct path. At 0 nothing is generate
 
 A preset bar sits at the top of the editor: `[<] [PresetName*] [>] [Save] [Save As...]
 [Delete] [Import...] [Export...]`. Clicking the preset name opens a Factory/User menu; a
-trailing `*` means the current preset has unsaved changes. Ten factory presets ship in the
-box (see `presets.md` for what each one is for); user presets save to
+trailing `*` means the current preset has unsaved changes. Twelve factory presets ship in the
+box (see `presets.md` for what each one is for) — including **Tape Slap 7.5** and **Worn
+Slap**, added in v0.5.0 to exercise Wobble and Age; user presets save to
 `~/Library/Audio/Presets/Yves Vogl/Miserere/` on macOS (`%APPDATA%/Yves Vogl/Miserere/Presets/`
 on Windows). The preset menu's "Set current as default" makes any preset — factory or user —
 load automatically on every fresh instance; "Import..." accepts both single preset files and
@@ -204,9 +224,6 @@ oversampling is for, and it costs latency.
   a sustained pure tone (a synth or a very steady held vowel) meets a mild comb whose depth
   depends on the note. On real programme material this is inaudible; a smarter splice is on
   the roadmap.
-- After a long silence the SANDWICH bus settles around −150 dBFS instead of true digital
-  silence — roughly 30 dB below the smallest value a 24-bit file can hold. Every other bus
-  reaches exact zero.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
