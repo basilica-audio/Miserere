@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 // Bus (3) SPREAD: measurable +/-cents pitch offset on L/R (via FFT), base
@@ -287,6 +288,7 @@ namespace
         const int total = 1 << 17;
 
         SpreadPitch spread;
+        spread.setSmartSplice (false); // pin the fixed-separation path (see block comment)
         spread.setDetuneCents (detuneCents);
         spread.setTimeScale (1.0f);
         spread.setWidth (1.0f);
@@ -493,35 +495,17 @@ TEST_CASE ("Spread: detune automation ramp is click-free (per-sample smoothing)"
 // same build against its own pinned v0.5.0 behaviour.
 namespace
 {
-    // Envelope peak-to-trough on a sustained tone, with settle long enough
-    // for the detector + separation slew to converge (~1.4 s worst case)
-    // and analysis covering at least one full crossfade sweep cycle at
-    // 15 cents detune (~3.2 s).
-    double smartSpliceRippleDb (double frequencyHz, bool smartSplice)
+    // Envelope peak-to-trough of an already-rendered stereo buffer's L
+    // channel: rectify + one-pole LP at 80 Hz, analysed past the settle.
+    double envelopeRippleDb (const juce::AudioBuffer<float>& buffer, int settleSamples, double sampleRate)
     {
-        constexpr int settleSamples = 120000; // 2.5 s
-        constexpr int analysisSamples = 168000; // 3.5 s
-        constexpr int total = settleSamples + analysisSamples;
-
-        SpreadPitch spread;
-        spread.setSmartSplice (smartSplice);
-        spread.setDetuneCents (15.0f);
-        spread.setTimeScale (1.0f);
-        spread.setWidth (1.0f);
-        spread.prepare (makeMonoInputSpec (total));
-
-        juce::AudioBuffer<float> buffer (2, total);
-        TestHelpers::fillWithSine (buffer, testSampleRate, frequencyHz, 0.5f);
-        juce::dsp::AudioBlock<float> block (buffer);
-        spread.process (block);
-
         const auto* data = buffer.getReadPointer (0);
         float state = 0.0f;
-        const auto alpha = static_cast<float> (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * 80.0 / testSampleRate));
+        const auto alpha = static_cast<float> (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * 80.0 / sampleRate));
 
         double envMin = 1.0e9, envMax = 0.0;
 
-        for (int i = 0; i < total; ++i)
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
             state += alpha * (std::abs (data[i]) - state);
 
@@ -534,15 +518,46 @@ namespace
 
         return 20.0 * std::log10 (envMax / std::max (envMin, 1.0e-12));
     }
+
+    // Ripple on a sustained tone, with settle long enough for the detector +
+    // separation slew to converge (~1.4 s worst case) and analysis covering
+    // at least one full crossfade sweep cycle at 15 cents detune (~3.2 s).
+    // Rate is a parameter: the detector's whole geometry (decimation, lag
+    // range, ring size) derives from it in prepare().
+    double smartSpliceRippleDb (double frequencyHz, bool smartSplice, double sampleRate = testSampleRate)
+    {
+        const auto settleSamples = static_cast<int> (2.5 * sampleRate);
+        const auto analysisSamples = static_cast<int> (3.5 * sampleRate);
+        const auto total = settleSamples + analysisSamples;
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = static_cast<juce::uint32> (total);
+        spec.numChannels = 2;
+
+        SpreadPitch spread;
+        spread.setSmartSplice (smartSplice);
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (1.0f);
+        spread.setWidth (1.0f);
+        spread.prepare (spec);
+
+        juce::AudioBuffer<float> buffer (2, total);
+        TestHelpers::fillWithSine (buffer, sampleRate, frequencyHz, 0.5f);
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+
+        return envelopeRippleDb (buffer, settleSamples, sampleRate);
+    }
 }
 
 TEST_CASE ("Spread: period-adaptive splice bounds sustained-tone ripple at every probe, incl. the worst comb tooth", "[dsp][spread][quality][smartsplice]")
 {
-    // Probe set: three anti-phase teeth of the 33.3 Hz separation comb
+    // Probe set: two anti-phase teeth of the 33.3 Hz separation comb
     // ((k+0.5)/30 ms - the deep-null frequencies), one in-phase tooth and
     // the golden's 220 Hz. Today's pinned behaviour is note-dependent comb
     // luck; the smart splice must flatten ALL of them below a uniform bar.
-    const double probes[] = { 6.5 / 0.030, 220.0, 7.5 / 0.030, 300.0, 9.5 / 0.030 };
+    const double probes[] = { 6.5 / 0.030, 220.0, 300.0, 9.5 / 0.030 };
 
     std::vector<double> offDb, onDb;
 
@@ -554,8 +569,11 @@ TEST_CASE ("Spread: period-adaptive splice bounds sustained-tone ripple at every
 
         // Uniform bar: no note-dependence survives (the OFF path swings
         // from ~4 dB to >18 dB across these same probes; ON measures
-        // 1.5-2.1 dB on this build - the bar leaves platform margin).
-        CHECK (onDb.back() <= 3.5);
+        // 1.5-2.1 dB on this build). The bar sits BELOW the 3.01 dB that a
+        // separation-only fix would give (in-phase taps through the plain
+        // equal-power window sum to a sqrt(2) mid-crossfade bump), so it
+        // also pins that the sin^2 window blend actually engages.
+        CHECK (onDb.back() <= 2.6);
     }
 
     const auto maxOff = *std::max_element (offDb.begin(), offDb.end());
@@ -567,6 +585,135 @@ TEST_CASE ("Spread: period-adaptive splice bounds sustained-tone ripple at every
     // makes the A/B meaningful) and the smart splice must collapse it.
     CHECK (maxOff >= 15.0);
     CHECK (maxOn <= maxOff - 10.0);
+}
+
+TEST_CASE ("Spread: smart splice holds at 44.1 kHz (rate-derived detector geometry)", "[dsp][spread][quality][smartsplice]")
+{
+    // The detector's decimation factor, lag range, correlation window and
+    // ring size all derive from the sample rate in prepare(); the comb
+    // teeth sit at the same FREQUENCIES (the separation is a time), so the
+    // worst 48 kHz probe is the worst 44.1 kHz probe too.
+    const double worstToothHz = 6.5 / 0.030;
+
+    const auto offDb = smartSpliceRippleDb (worstToothHz, false, 44100.0);
+    const auto onDb = smartSpliceRippleDb (worstToothHz, true, 44100.0);
+
+    INFO ("44.1 kHz worst tooth: OFF " << offDb << " dB, ON " << onDb << " dB");
+    CHECK (offDb >= 12.0);
+    CHECK (onDb <= 2.6);
+}
+
+TEST_CASE ("Spread: detector survives a NaN/Inf burst and re-acquires without reset()", "[dsp][spread][robustness][smartsplice]")
+{
+    // The engine only sanitizes the bus SUM, so garbage reaches the bus
+    // modules themselves. The delay lines self-flush in ~180 ms, but the
+    // detector's recursive one-poles would latch a NaN forever without
+    // their input guard - and a latched detector silently reverts the bus
+    // to the fixed-separation comb for the rest of the session. Feed a
+    // burst, then a worst-tooth tone, and require the ripple bar WITHOUT
+    // any reset() call in between.
+    constexpr int burstSamples = 512;
+    const double worstToothHz = 6.5 / 0.030;
+    constexpr int settleSamples = 144000; // 3 s: delay-line flush + re-acquisition + slew
+    constexpr int analysisSamples = 168000;
+
+    SpreadPitch spread;
+    spread.setDetuneCents (15.0f);
+    spread.setTimeScale (1.0f);
+    spread.setWidth (1.0f);
+    spread.prepare (makeMonoInputSpec (settleSamples + analysisSamples));
+
+    juce::AudioBuffer<float> burst (2, burstSamples);
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        auto* data = burst.getWritePointer (channel);
+
+        for (int i = 0; i < burstSamples; ++i)
+            data[i] = (i % 3 == 0) ? std::numeric_limits<float>::quiet_NaN()
+                    : (i % 7 == 0) ? std::numeric_limits<float>::infinity()
+                                   : 0.5f;
+    }
+
+    juce::dsp::AudioBlock<float> burstBlock (burst);
+    spread.process (burstBlock);
+
+    juce::AudioBuffer<float> tone (2, settleSamples + analysisSamples);
+    TestHelpers::fillWithSine (tone, testSampleRate, worstToothHz, 0.5f);
+    juce::dsp::AudioBlock<float> toneBlock (tone);
+    spread.process (toneBlock);
+
+    // Output must be clean again once the delay lines have flushed. The
+    // ripple is measured on this trimmed view too: the follower is itself
+    // a recursive filter, so running it across the poisoned head would
+    // latch NaN and return a meaningless -inf.
+    juce::AudioBuffer<float> tail (tone.getArrayOfWritePointers(), 2, 48000, settleSamples + analysisSamples - 48000);
+    CHECK (TestHelpers::allSamplesFinite (tail));
+
+    // ...and the smart splice must have RE-ENGAGED: a latched detector
+    // would leave the worst tooth at its >15 dB comb ripple.
+    const auto rippleDb = envelopeRippleDb (tail, settleSamples - 48000, testSampleRate);
+    INFO ("post-burst worst-tooth ripple = " << rippleDb << " dB");
+    CHECK (rippleDb >= 0.0); // a real measurement, not a NaN-latched follower
+    CHECK (rippleDb <= 2.6);
+}
+
+TEST_CASE ("Spread: smart splice stays click-free through a pitch step", "[dsp][spread][quality][smartsplice][automation]")
+{
+    // A note change while fully engaged fires everything at once: the
+    // snapped target jumps, confidence dips, the blend collapses via its
+    // alignment gate and the quieter tap slews to the new separation. None
+    // of that may click. Phase-continuous input (the step happens in
+    // frequency, not in the waveform), so every output discontinuity is the
+    // module's own. Bound the stepped render's largest sample-to-sample
+    // jump against static renders at both pitches - same technique as the
+    // detune-automation case.
+    constexpr int half = 120000; // 2.5 s per segment
+    constexpr double fA = 220.0;
+    constexpr double fB = 246.94; // B3 - lands on a different snapped separation
+
+    const auto maxStep = [] (double firstHz, double secondHz)
+    {
+        SpreadPitch spread;
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (1.0f);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (2 * half));
+
+        juce::AudioBuffer<float> buffer (2, 2 * half);
+        double phase = 0.0;
+
+        for (int i = 0; i < 2 * half; ++i)
+        {
+            phase += juce::MathConstants<double>::twoPi * (i < half ? firstHz : secondHz) / testSampleRate;
+            const auto value = static_cast<float> (0.5 * std::sin (phase));
+            buffer.setSample (0, i, value);
+            buffer.setSample (1, i, value);
+        }
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+
+        const auto* data = buffer.getReadPointer (0);
+        float previous = 0.0f;
+        float largest = 0.0f;
+
+        for (int i = 0; i < 2 * half; ++i)
+        {
+            largest = juce::jmax (largest, std::abs (data[i] - previous));
+            previous = data[i];
+        }
+
+        return largest;
+    };
+
+    // The higher pitch has larger natural per-sample steps, so the bar is
+    // the worst of the two STATIC renders - the stepped render may only add
+    // the 0.5 dB margin on top of what the input itself does.
+    const auto staticWorst = juce::jmax (maxStep (fA, fA), maxStep (fB, fB));
+    const auto stepped = maxStep (fA, fB);
+
+    INFO ("max per-sample step: static worst = " << staticWorst << ", stepped 220->246.94 Hz = " << stepped);
+    CHECK (stepped <= staticWorst * std::pow (10.0f, 0.5f / 20.0f));
 }
 
 TEST_CASE ("Spread: smart splice never engages on non-periodic treble-band material", "[dsp][spread][quality][smartsplice]")

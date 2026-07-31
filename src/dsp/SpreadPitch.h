@@ -57,9 +57,12 @@
 //   decorrelated material) to amplitude-complementary sin^2 (flat envelope
 //   for in-phase taps), gated on the separation actually having arrived -
 //   a misaligned sin^2 pair is strictly worse than sin,
-// - on non-periodic material the detector's confidence gate keeps the
-//   nominal 30 ms separation and sin window, so the doubled-vocal character
-//   on programme material is preserved (numerically identical path).
+// - on non-periodic material the detector's confidence gate (with
+//   hysteresis, so borderline material cannot flap the target) keeps the
+//   nominal 30 ms separation and sin window: the un-engaged path computes
+//   the same values as the fixed-separation code, identical up to float
+//   rounding at wrap re-seats, so the doubled-vocal character on programme
+//   material is preserved.
 // Because the normalized autocorrelation is scale-invariant, a treble-only
 // tone aliased through the decimator would fake full confidence: a spectral
 // plausibility gate (energy below the detector lowpass vs full-band energy)
@@ -111,10 +114,10 @@ private:
     static constexpr double targetSmoothingSeconds = 0.1;
     static constexpr float detectorFloorHz = 80.0f;       // lowest trackable fundamental
     static constexpr double detectorTargetRateHz = 12000.0;
-    static constexpr float confidenceGateLow = 0.6f;      // below: nominal separation, sin window
-    static constexpr float confidenceGateHigh = 0.9f;     // above: fully sin^2 window
+    static constexpr float confidenceGateLow = 0.6f;      // engage above this: snap the separation
+    static constexpr float confidenceGateRelease = 0.5f;  // release below this (hysteresis - no target flapping at the boundary)
+    static constexpr float confidenceGateHigh = 0.9f;     // fully sin^2 window at/above this
     static constexpr float maxSepSlewPerSample = 0.002f;  // ~3.5 cents transient on the quieter tap
-    static constexpr float blendAlignTolInv = 0.125f;     // sin^2 fades out within 8 samples of misalignment
 
     struct Voice
     {
@@ -170,7 +173,15 @@ private:
 
     PeriodDetector detector;
     bool smartSplice = true;
+    bool detectorEngaged = false;   // hysteresis state of the confidence gate
     float nominalSepSamples = 0.0f; // grain/2 at the prepared sample rate
+
+    // Rate-invariant tolerances, set in prepare(): the detector's lag
+    // quantum is decFactor full-rate samples, so absolute-sample constants
+    // would be defeated at 96/192 kHz (estimate jitter scales with the
+    // quantum, and phase tolerance is a TIME quantity).
+    float sepDeadbandSamples = 1.0f;  // ignore target moves below ~1/3 lag quantum
+    float blendAlignTolInv = 0.125f;  // sin^2 fades out within ~170 us of misalignment
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> widthSmoothed;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> detuneSmoothed;

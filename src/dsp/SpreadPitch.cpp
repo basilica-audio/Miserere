@@ -149,6 +149,13 @@ void SpreadPitch::PeriodDetector::reset() noexcept
 
 bool SpreadPitch::PeriodDetector::pushSample (float x) noexcept
 {
+    // A NaN/Inf would latch in the one-pole states forever (the delay lines
+    // self-flush, recursive filters do not) and silently disable the smart
+    // splice until reset(). The engine only sanitizes the bus SUM, so the
+    // detector guards its own input.
+    if (! std::isfinite (x))
+        x = 0.0f;
+
     lp1 += lpCoeff * (x - lp1);
     lp2 += lpCoeff * (lp1 - lp2);
 
@@ -275,6 +282,12 @@ void SpreadPitch::prepare (const juce::dsp::ProcessSpec& spec)
     nominalSepSamples = static_cast<float> (grainMs * 0.0005 * sampleRate);
     detector.prepare (sampleRate, grainMs * 0.0005f, detectorFloorHz);
 
+    // Rate-invariant tolerances (see header): one detector lag quantum is
+    // decFactor full-rate samples, and the sin^2 alignment tolerance is a
+    // time quantity (~170 us, == 8 samples at 48 kHz).
+    sepDeadbandSamples = 0.35f * static_cast<float> (detector.decFactor);
+    blendAlignTolInv = 1.0f / (2.0f * static_cast<float> (detector.decFactor));
+
     widthSmoothed.reset (sampleRate, smoothingTimeSeconds);
     widthSmoothed.setCurrentAndTargetValue (width);
     detuneSmoothed.reset (sampleRate, smoothingTimeSeconds);
@@ -313,6 +326,7 @@ void SpreadPitch::setSmartSplice (bool enabled) noexcept
 
     if (! enabled)
     {
+        detectorEngaged = false;
         sepTargetSmoothed.setCurrentAndTargetValue (nominalSepSamples);
         windowBlendSmoothed.setCurrentAndTargetValue (0.0f);
     }
@@ -327,6 +341,7 @@ void SpreadPitch::reset()
     windowBlendSmoothed.setCurrentAndTargetValue (0.0f);
 
     detector.reset();
+    detectorEngaged = false;
 
     voiceUp.reset (static_cast<float> (baseDelayUpMs * timeScale * 0.001 * sampleRate), nominalSepSamples);
     voiceDown.reset (static_cast<float> (baseDelayDownMs * timeScale * 0.001 * sampleRate), nominalSepSamples);
@@ -368,13 +383,21 @@ void SpreadPitch::process (juce::dsp::AudioBlock<float>& block) noexcept
         {
             if (detector.pushSample (monoInput))
             {
-                if (detector.lastConfidence > confidenceGateLow)
+                // Hysteresis: engage above 0.6, release below 0.5 -
+                // borderline-periodic material (breathy vocal, tone+noise)
+                // hovering at the gate must not flap the separation target
+                // between nominal and snapped on successive sweeps.
+                if (detectorEngaged ? detector.lastConfidence < confidenceGateRelease
+                                    : detector.lastConfidence > confidenceGateLow)
+                    detectorEngaged = ! detectorEngaged;
+
+                if (detectorEngaged)
                 {
                     const auto snapped = juce::jlimit (0.55f * nominalSepSamples, nominalSepSamples, detector.lastLagFullRate);
 
                     // Deadband: sweep-to-sweep estimate jitter must not
                     // keep the separation slewing forever on a held note.
-                    if (std::abs (snapped - sepTargetSmoothed.getTargetValue()) > 1.0f)
+                    if (std::abs (snapped - sepTargetSmoothed.getTargetValue()) > sepDeadbandSamples)
                         sepTargetSmoothed.setTargetValue (snapped);
 
                     windowBlendSmoothed.setTargetValue (

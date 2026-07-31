@@ -235,8 +235,10 @@ oversampling is for, and it costs latency.
   tones that previously met a note-dependent comb of up to ~18 dB envelope ripple now stay
   within ~2 dB at any pitch. On unpitched material (consonants, breath, noise) the detector
   stands down and the bus behaves exactly as before. Residual limits: the tracker follows the
-  lowest fundamental down to 80 Hz, and fast vibrato can outrun the ~1 s re-alignment — a brief
-  return of the old mild shimmer, which reads as natural doubling.
+  lowest fundamental down to 80 Hz; re-alignment takes roughly a second after a note lands
+  (longer for very low notes, so very short notes ride mostly on the standard path), and fast
+  vibrato can outrun it — a brief return of the old mild shimmer, which reads as natural
+  doubling.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
