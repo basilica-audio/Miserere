@@ -82,9 +82,17 @@
 // - a short gain fade above the read floor silences a tap that still
 //   reaches the clamp transiently (possible only until the live separation
 //   has converged after a fast downward time-scale move),
-// - while the live window is non-causal the separation slew runs 10x, so
-//   the window shrinks under the new base in well under a second instead of
-//   waiting up to a full wrap cycle (~8 s at the default detune).
+// - while the live window is non-causal AND the tap being slewed is
+//   effectively silent (window gain below ~0.25, which covers the faded
+//   stretch and the outermost window edges) the separation slew runs 10x:
+//   the window converges under the new base within ~2 s, while a tap the
+//   listener can hear only ever sees the standard ~3.5-cent micro-slew.
+//   The audibility gate exists because a flat 10x boost is a ~34-cent
+//   pitch slope, and adversarial review showed the tap it rides is
+//   frequently at up to -3 dB - not masked (the cost of the gate is a
+//   periodic ~3 dB duck on the affected voice until converged: the faded
+//   tap is silenced instead of power-complemented, deliberately traded
+//   against the strictly worse dry bleed).
 // The sin^2 blend gate in process() compares the live separation against
 // the UNCAPPED snapped target, so the in-phase window law disengages
 // automatically while a voice's separation is being capped.
@@ -143,7 +151,8 @@ private:
     // Causal window guard (issue #28).
     static constexpr float minCausalDelaySamples = 2.0f;       // interpolator read floor (matches the popSample clamp)
     static constexpr float causalFadeSamples = 64.0f;          // silencing ramp above the read floor
-    static constexpr float causalCatchupSlewPerSample = 0.02f; // boosted slew while the live window is non-causal
+    static constexpr float causalCatchupSlewPerSample = 0.02f; // boosted slew while the live window is non-causal...
+    static constexpr float causalCatchupMaxGain = 0.25f;       // ...but only on a tap below ~-12 dB (the boost is ~34 cents - never on an audible tap)
 
     struct Voice
     {

@@ -46,18 +46,30 @@ float SpreadPitch::Voice::processSample (float input, float baseSamples, float s
     // note - so the live separation also slews toward the target between
     // wraps. The step is capped (~3.5 cents of transient pitch offset) and
     // applied to whichever tap currently carries LESS window gain (the one
-    // farther from the window centre), where it is masked. While the live
-    // window is still non-causal (only after a fast downward time-scale
-    // move), the slew runs boosted: seconds of single-tap output shrink to
-    // well under one, and the tap being slewed is the outer one - usually
-    // the very tap the causal-floor fade below is silencing.
+    // farther from the window centre), where it is masked.
     const auto sepError = sepTarget - sepSamples;
     if (sepError != 0.0f)
     {
-        const auto slewLimit = baseSamples - sepSamples < minCausalDelaySamples ? causalCatchupSlewPerSample
-                                                                                : maxSepSlewPerSample;
-        const auto step = juce::jlimit (-slewLimit, slewLimit, sepError);
         const auto quieter = std::abs (tapDelaySamples[0] - baseSamples) > std::abs (tapDelaySamples[1] - baseSamples) ? size_t { 0 } : size_t { 1 };
+
+        // While the live window is still non-causal (only after a fast
+        // downward time-scale move), the slew may run 10x - but 0.02
+        // samples/sample is a ~34-cent pitch slope, so the boost is gated
+        // on the slewed tap being effectively SILENT (plain sin window
+        // gain times the causal fade - omitting the blend term can only
+        // OVERestimate the gain, so the gate errs conservative; the
+        // review that mandated the gate showed the
+        // quieter tap frequently sits at up to -3 dB during the catch-up,
+        // where a flat boost would be an audible warble). Silent stretches
+        // converge fast, audible stretches fall back to the masked rate,
+        // and any wrap still snaps the separation exactly and click-free.
+        const auto quieterPos = juce::jlimit (0.0f, 1.0f, (tapDelaySamples[quieter] - (baseSamples - sepSamples)) / (2.0f * sepSamples));
+        const auto quieterGain = std::sin (juce::MathConstants<float>::pi * quieterPos)
+                                  * juce::jlimit (0.0f, 1.0f, (tapDelaySamples[quieter] - minCausalDelaySamples) * (1.0f / causalFadeSamples));
+
+        const auto boosted = baseSamples - sepSamples < minCausalDelaySamples && quieterGain < causalCatchupMaxGain;
+        const auto slewLimit = boosted ? causalCatchupSlewPerSample : maxSepSlewPerSample;
+        const auto step = juce::jlimit (-slewLimit, slewLimit, sepError);
 
         // Widening (step > 0) pushes the quieter tap away from the other
         // tap; narrowing pulls it in. Direction depends on which side of

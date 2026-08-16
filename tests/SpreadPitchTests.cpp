@@ -899,9 +899,13 @@ TEST_CASE ("Spread: timeScale 0.5 keeps both voices causal - no unshifted dry bl
             const auto bleed = toneAmplitudeAt (buffer, channel, settle, analysis, inputHz, testSampleRate);
             const auto bleedDb = 20.0 * std::log10 (bleed / amp + 1.0e-12);
 
-            // The voice must still be ALIVE and shifting - a fix that just
+            // The voice must still be ALIVE with BOTH taps - a fix that
             // silenced a tap would pass the bleed bar trivially. Two live
-            // equal-power taps put the voice near the input's own RMS.
+            // taps measure ~+2 dB re input RMS here; a voice running on a
+            // single tap sits near -3 dB (RMS of one sin window), so the
+            // +0.5 dB bar separates the two states with margin either way
+            // (adversarial-review hardening: the original -6 dB bar could
+            // not tell a dead tap from a healthy voice).
             juce::AudioBuffer<float> channelView (buffer.getArrayOfWritePointers() + channel, 1, 0, settle + analysis);
             const auto levelDb = 20.0 * std::log10 (TestHelpers::tailRms (channelView, settle) / (amp / juce::MathConstants<double>::sqrt2));
 
@@ -911,7 +915,7 @@ TEST_CASE ("Spread: timeScale 0.5 keeps both voices causal - no unshifted dry bl
             // Issue #28 acceptance: no unshifted dry bleed above -40 dB.
             // (Unfixed, the pinned taps measure around -7 dB here.)
             CHECK (bleedDb <= -40.0);
-            CHECK (levelDb >= -6.0);
+            CHECK (levelDb >= 0.5);
         }
     }
 }
@@ -922,16 +926,18 @@ TEST_CASE ("Spread: timeScale automation across the causal boundary is click-fre
     // sweep). The downward move is the hard direction: the live window must
     // shrink from 30 ms to under the new 15 ms base - until it has, the
     // causal-floor fade must silence the pinned tap (instead of dry bleed)
-    // and the boosted slew must converge the window in well under a second
-    // (instead of waiting up to ~8 s for a wrap). Automation happens at
-    // block rate through the public setter, smoothed inside.
+    // and the gain-gated boosted slew must converge the window within ~2 s
+    // (instead of waiting up to ~8 s for a wrap; the boost only ever rides
+    // a tap below ~-12 dB, so convergence may not warble an audible tap).
+    // Automation happens at block rate through the public setter, smoothed
+    // inside.
     constexpr double inputHz = 997.0;
     constexpr float amp = 0.5f;
     constexpr int blockSize = 512;
 
     const auto segment1 = static_cast<int> (1.5 * testSampleRate); // dwell at 0.5
     const auto segment2 = static_cast<int> (2.0 * testSampleRate); // dwell at 2.0
-    const auto segment3 = static_cast<int> (3.0 * testSampleRate); // dwell at 0.5 again
+    const auto segment3 = static_cast<int> (4.5 * testSampleRate); // dwell at 0.5 again
     const auto total = segment1 + segment2 + segment3;
 
     const auto render = [&] (bool automate)
@@ -996,7 +1002,7 @@ TEST_CASE ("Spread: timeScale automation across the causal boundary is click-fre
         return largest;
     };
 
-    const auto automated = render (true);
+    auto automated = render (true);
     CHECK (TestHelpers::allSamplesFinite (automated));
 
     // Click bar: the automated render's largest per-sample step must stay
@@ -1010,11 +1016,13 @@ TEST_CASE ("Spread: timeScale automation across the causal boundary is click-fre
     INFO ("max per-sample step: static worst = " << staticWorst << ", automated = " << steppedWorst);
     CHECK (steppedWorst <= staticWorst * std::pow (10.0f, 0.5f / 20.0f));
 
-    // Recovery bar: within a second of the downward move the live windows
-    // must be causal again - measure dry bleed over the final two seconds
-    // of the last 0.5 dwell (the boosted slew converges in ~0.75 s; the old
-    // wrap-luck path would still be bleeding here).
-    const auto recoveryStart = segment1 + segment2 + static_cast<int> (1.0 * testSampleRate);
+    // Recovery bars, measured over the final 2.5 s of the last 0.5 dwell
+    // (the gain-gated boost has converged the windows by ~2 s in): no dry
+    // bleed (the old wrap-luck path would still be bleeding here), and the
+    // voice must be back at full two-tap level - a recovery that "solved"
+    // the bleed by leaving a tap permanently silenced would pass the bleed
+    // bar alone (adversarial-review hardening: liveness was unchecked).
+    const auto recoveryStart = segment1 + segment2 + static_cast<int> (2.0 * testSampleRate);
     const auto recoveryLength = total - recoveryStart;
 
     for (int channel = 0; channel < 2; ++channel)
@@ -1022,8 +1030,13 @@ TEST_CASE ("Spread: timeScale automation across the causal boundary is click-fre
         const auto bleed = toneAmplitudeAt (automated, channel, recoveryStart, recoveryLength, inputHz, testSampleRate);
         const auto bleedDb = 20.0 * std::log10 (bleed / amp + 1.0e-12);
 
-        INFO ("post-automation dry bleed, channel " << channel << ": " << bleedDb << " dB re input");
+        juce::AudioBuffer<float> channelView (automated.getArrayOfWritePointers() + channel, 1, 0, total);
+        const auto levelDb = 20.0 * std::log10 (TestHelpers::tailRms (channelView, recoveryStart) / (amp / juce::MathConstants<double>::sqrt2));
+
+        INFO ("post-automation, channel " << channel << ": dry bleed " << bleedDb
+              << " dB re input, level " << levelDb << " dB re input RMS");
         CHECK (bleedDb <= -40.0);
+        CHECK (levelDb >= 0.5);
     }
 }
 
