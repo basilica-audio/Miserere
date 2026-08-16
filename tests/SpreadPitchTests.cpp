@@ -824,6 +824,209 @@ TEST_CASE ("Spread: reset() restores the smart-splice state machine exactly", "[
     CHECK (maxAbsDiff < 1.0e-7);
 }
 
+//==============================================================================
+// Causal window guard (issue #28).
+//
+// At timeScale < 1 a voice's base delay shrinks below the nominal 30 ms
+// separation (up voice: 15 ms base at timeScale 0.5; down voice: 25 ms), so
+// the window [base - sep, base + sep] used to straddle zero delay: a tap
+// gliding through the non-causal stretch sat pinned at the 2-sample read
+// clamp with window gain up to -3 dB, outputting an unshifted dry copy of
+// the input for ~1.7 s per traversal. The fix caps the separation at
+// base - 2 inside the voice (plus a silencing fade at the read floor and a
+// boosted slew while a live window is still non-causal after automation).
+namespace
+{
+    // Amplitude of the EXACT probe frequency in one channel: Hann-weighted
+    // complex projection (a single-bin DFT at a non-integer bin). The
+    // shifted taps sit a detune away (~8.7 Hz at 15 cents / 997 Hz) with
+    // sidebands spaced at the slow traversal rate, and a multi-second Hann
+    // window suppresses them by > 60 dB at the probe frequency - anything
+    // that remains there is genuinely unshifted bleed from a pinned tap.
+    double toneAmplitudeAt (const juce::AudioBuffer<float>& buffer,
+                            int channel,
+                            int startSample,
+                            int numSamples,
+                            double frequencyHz,
+                            double sampleRate)
+    {
+        const auto* data = buffer.getReadPointer (channel);
+        double re = 0.0, im = 0.0, windowSum = 0.0;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto w = 0.5 * (1.0 - std::cos (juce::MathConstants<double>::twoPi * i / (numSamples - 1)));
+            const auto phi = juce::MathConstants<double>::twoPi * frequencyHz
+                              * static_cast<double> (startSample + i) / sampleRate;
+
+            re += w * static_cast<double> (data[startSample + i]) * std::cos (phi);
+            im += w * static_cast<double> (data[startSample + i]) * std::sin (phi);
+            windowSum += w;
+        }
+
+        return 2.0 * std::sqrt (re * re + im * im) / windowSum;
+    }
+}
+
+TEST_CASE ("Spread: timeScale 0.5 keeps both voices causal - no unshifted dry bleed (issue #28)", "[dsp][spread][causal]")
+{
+    constexpr double inputHz = 997.0;
+    constexpr float amp = 0.5f;
+
+    const auto settle = static_cast<int> (1.5 * testSampleRate);
+    const auto analysis = static_cast<int> (3.5 * testSampleRate);
+
+    // Both smart-splice paths: the capped separation is a geometric
+    // property of the voice, not of the detector.
+    for (const bool smart : { false, true })
+    {
+        SpreadPitch spread;
+        spread.setSmartSplice (smart);
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (0.5f);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (settle + analysis));
+
+        juce::AudioBuffer<float> buffer (2, settle + analysis);
+        TestHelpers::fillWithSine (buffer, testSampleRate, inputHz, amp);
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const auto bleed = toneAmplitudeAt (buffer, channel, settle, analysis, inputHz, testSampleRate);
+            const auto bleedDb = 20.0 * std::log10 (bleed / amp + 1.0e-12);
+
+            // The voice must still be ALIVE and shifting - a fix that just
+            // silenced a tap would pass the bleed bar trivially. Two live
+            // equal-power taps put the voice near the input's own RMS.
+            juce::AudioBuffer<float> channelView (buffer.getArrayOfWritePointers() + channel, 1, 0, settle + analysis);
+            const auto levelDb = 20.0 * std::log10 (TestHelpers::tailRms (channelView, settle) / (amp / juce::MathConstants<double>::sqrt2));
+
+            INFO ("smartSplice " << (smart ? "ON" : "OFF") << ", channel " << channel
+                  << ": dry bleed " << bleedDb << " dB re input, level " << levelDb << " dB re input RMS");
+
+            // Issue #28 acceptance: no unshifted dry bleed above -40 dB.
+            // (Unfixed, the pinned taps measure around -7 dB here.)
+            CHECK (bleedDb <= -40.0);
+            CHECK (levelDb >= -6.0);
+        }
+    }
+}
+
+TEST_CASE ("Spread: timeScale automation across the causal boundary is click-free and recovers (issue #28)", "[dsp][spread][causal][automation]")
+{
+    // timeScale 0.5 -> 2 -> 0.5 during a held tone (the issue's acceptance
+    // sweep). The downward move is the hard direction: the live window must
+    // shrink from 30 ms to under the new 15 ms base - until it has, the
+    // causal-floor fade must silence the pinned tap (instead of dry bleed)
+    // and the boosted slew must converge the window in well under a second
+    // (instead of waiting up to ~8 s for a wrap). Automation happens at
+    // block rate through the public setter, smoothed inside.
+    constexpr double inputHz = 997.0;
+    constexpr float amp = 0.5f;
+    constexpr int blockSize = 512;
+
+    const auto segment1 = static_cast<int> (1.5 * testSampleRate); // dwell at 0.5
+    const auto segment2 = static_cast<int> (2.0 * testSampleRate); // dwell at 2.0
+    const auto segment3 = static_cast<int> (3.0 * testSampleRate); // dwell at 0.5 again
+    const auto total = segment1 + segment2 + segment3;
+
+    const auto render = [&] (bool automate)
+    {
+        SpreadPitch spread;
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (0.5f);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (blockSize));
+
+        juce::AudioBuffer<float> out (2, total);
+
+        for (int start = 0; start < total; start += blockSize)
+        {
+            if (automate)
+                spread.setTimeScale (start < segment1 || start >= segment1 + segment2 ? 0.5f : 2.0f);
+
+            const auto length = std::min (blockSize, total - start);
+            juce::AudioBuffer<float> blockBuffer (2, length);
+            TestHelpers::fillWithSine (blockBuffer, testSampleRate, inputHz, amp, start);
+            juce::dsp::AudioBlock<float> block (blockBuffer);
+            spread.process (block);
+
+            for (int channel = 0; channel < 2; ++channel)
+                out.copyFrom (channel, start, blockBuffer, channel, 0, length);
+        }
+
+        return out;
+    };
+
+    const auto renderStatic = [&] (float scale)
+    {
+        SpreadPitch spread;
+        spread.setDetuneCents (15.0f);
+        spread.setTimeScale (scale);
+        spread.setWidth (1.0f);
+        spread.prepare (makeMonoInputSpec (total));
+
+        juce::AudioBuffer<float> buffer (2, total);
+        TestHelpers::fillWithSine (buffer, testSampleRate, inputHz, amp);
+        juce::dsp::AudioBlock<float> block (buffer);
+        spread.process (block);
+        return buffer;
+    };
+
+    const auto maxStep = [&] (const juce::AudioBuffer<float>& buffer)
+    {
+        float largest = 0.0f;
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const auto* data = buffer.getReadPointer (channel);
+            float previous = 0.0f;
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                largest = juce::jmax (largest, std::abs (data[i] - previous));
+                previous = data[i];
+            }
+        }
+
+        return largest;
+    };
+
+    const auto automated = render (true);
+    CHECK (TestHelpers::allSamplesFinite (automated));
+
+    // Click bar: the automated render's largest per-sample step must stay
+    // within 0.5 dB of the worst STATIC render (same tone, both dwelled
+    // scales) - every re-seat lands at a window edge (gain ~0) and both the
+    // fade and the boosted slew are continuous, so automation may not add
+    // discontinuities of its own.
+    const auto staticWorst = juce::jmax (maxStep (renderStatic (0.5f)), maxStep (renderStatic (2.0f)));
+    const auto steppedWorst = maxStep (automated);
+
+    INFO ("max per-sample step: static worst = " << staticWorst << ", automated = " << steppedWorst);
+    CHECK (steppedWorst <= staticWorst * std::pow (10.0f, 0.5f / 20.0f));
+
+    // Recovery bar: within a second of the downward move the live windows
+    // must be causal again - measure dry bleed over the final two seconds
+    // of the last 0.5 dwell (the boosted slew converges in ~0.75 s; the old
+    // wrap-luck path would still be bleeding here).
+    const auto recoveryStart = segment1 + segment2 + static_cast<int> (1.0 * testSampleRate);
+    const auto recoveryLength = total - recoveryStart;
+
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        const auto bleed = toneAmplitudeAt (automated, channel, recoveryStart, recoveryLength, inputHz, testSampleRate);
+        const auto bleedDb = 20.0 * std::log10 (bleed / amp + 1.0e-12);
+
+        INFO ("post-automation dry bleed, channel " << channel << ": " << bleedDb << " dB re input");
+        CHECK (bleedDb <= -40.0);
+    }
+}
+
 TEST_CASE ("Spread: reset() clears both micro-pitch delay lines", "[dsp][spread][reset]")
 {
     SpreadPitch spread;
