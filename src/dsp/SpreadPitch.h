@@ -68,6 +68,35 @@
 // plausibility gate (energy below the detector lowpass vs full-band energy)
 // keeps the detector out of material with no fundamental in its range.
 //
+// Causal window guard (issue #28). At timeScale < 1 a voice's base delay
+// shrinks below the nominal 30 ms separation (the up voice's 15 ms base at
+// timeScale 0.5; the down voice below ~0.6), so the nominal window
+// [base - sep, base + sep] would straddle zero delay: a tap gliding through
+// the non-causal stretch sat pinned at the interpolator's 2-sample read
+// clamp with window gain up to -3 dB, outputting an unshifted dry copy of
+// the input (and no pitch shift) for seconds per traversal. Three guards,
+// all inside Voice::processSample:
+// - the separation target is capped at base - 2 samples, so any
+//   steady-state window is causal at every timeScale (Voice::reset seeds
+//   the same cap, so a session restored at timeScale 0.5 starts causal),
+// - a short gain fade above the read floor silences a tap that still
+//   reaches the clamp transiently (possible only until the live separation
+//   has converged after a fast downward time-scale move),
+// - while the live window is non-causal AND the tap being slewed is
+//   effectively silent (window gain below ~0.25, which covers the faded
+//   stretch and the outermost window edges) the separation slew runs 10x:
+//   the window converges under the new base within ~2 s, while a tap the
+//   listener can hear only ever sees the standard ~3.5-cent micro-slew.
+//   The audibility gate exists because a flat 10x boost is a ~34-cent
+//   pitch slope, and adversarial review showed the tap it rides is
+//   frequently at up to -3 dB - not masked (the cost of the gate is a
+//   periodic ~3 dB duck on the affected voice until converged: the faded
+//   tap is silenced instead of power-complemented, deliberately traded
+//   against the strictly worse dry bleed).
+// The sin^2 blend gate in process() compares the live separation against
+// the UNCAPPED snapped target, so the in-phase window law disengages
+// automatically while a voice's separation is being capped.
+//
 // Voice 0 (base ~30 ms) is detuned UP by `spread_detune` cents and panned
 // toward the left; voice 1 (base ~50 ms) is detuned DOWN by the same amount
 // and panned toward the right. `spread_width` blends between the two
@@ -118,6 +147,12 @@ private:
     static constexpr float confidenceGateRelease = 0.5f;  // release below this (hysteresis - no target flapping at the boundary)
     static constexpr float confidenceGateHigh = 0.9f;     // fully sin^2 window at/above this
     static constexpr float maxSepSlewPerSample = 0.002f;  // ~3.5 cents transient on the quieter tap
+
+    // Causal window guard (issue #28).
+    static constexpr float minCausalDelaySamples = 2.0f;       // interpolator read floor (matches the popSample clamp)
+    static constexpr float causalFadeSamples = 64.0f;          // silencing ramp above the read floor
+    static constexpr float causalCatchupSlewPerSample = 0.02f; // boosted slew while the live window is non-causal...
+    static constexpr float causalCatchupMaxGain = 0.25f;       // ...but only on a tap below ~-12 dB (the boost is ~34 cents - never on an audible tap)
 
     struct Voice
     {

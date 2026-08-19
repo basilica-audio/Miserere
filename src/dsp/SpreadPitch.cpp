@@ -20,15 +20,26 @@ void SpreadPitch::Voice::reset (float baseSamples, float halfGrainSamples)
 
     // The two taps start a half-grain apart, so one is always near the
     // middle of its crossfade window (full gain) while the other is near
-    // an edge (fading in/out) - see class comment.
-    sepSamples = halfGrainSamples;
+    // an edge (fading in/out) - see class comment. The separation carries
+    // the same causal cap as processSample (issue #28): a session restored
+    // at timeScale < 1 must seed a causal window, not slew its way into one.
+    sepSamples = juce::jmin (halfGrainSamples, baseSamples - minCausalDelaySamples);
     tapDelaySamples[0] = baseSamples;
-    tapDelaySamples[1] = baseSamples - halfGrainSamples;
+    tapDelaySamples[1] = baseSamples - sepSamples;
 }
 
 float SpreadPitch::Voice::processSample (float input, float baseSamples, float sepTarget, float windowBlend) noexcept
 {
     const auto maxDelay = static_cast<float> (delayLine.getMaximumDelayInSamples());
+
+    // Causal window cap (issue #28): at timeScale < 1 the base delay can be
+    // smaller than the requested separation, which would push the lower
+    // window edge below the interpolator's read floor - a tap would then
+    // ride the read clamp with non-zero gain, outputting an unshifted dry
+    // copy of the input. Capping the TARGET keeps every converged window
+    // inside [minCausalDelay, base + sep]; the slew below and the wrap
+    // re-seats converge the live separation onto the cap.
+    sepTarget = juce::jmin (sepTarget, baseSamples - minCausalDelaySamples);
 
     // Continuous separation correction (issue #19): a wrap only comes around
     // every couple of seconds at small detunes, far too rare to align a sung
@@ -39,8 +50,26 @@ float SpreadPitch::Voice::processSample (float input, float baseSamples, float s
     const auto sepError = sepTarget - sepSamples;
     if (sepError != 0.0f)
     {
-        const auto step = juce::jlimit (-maxSepSlewPerSample, maxSepSlewPerSample, sepError);
         const auto quieter = std::abs (tapDelaySamples[0] - baseSamples) > std::abs (tapDelaySamples[1] - baseSamples) ? size_t { 0 } : size_t { 1 };
+
+        // While the live window is still non-causal (only after a fast
+        // downward time-scale move), the slew may run 10x - but 0.02
+        // samples/sample is a ~34-cent pitch slope, so the boost is gated
+        // on the slewed tap being effectively SILENT (plain sin window
+        // gain times the causal fade - omitting the blend term can only
+        // OVERestimate the gain, so the gate errs conservative; the
+        // review that mandated the gate showed the
+        // quieter tap frequently sits at up to -3 dB during the catch-up,
+        // where a flat boost would be an audible warble). Silent stretches
+        // converge fast, audible stretches fall back to the masked rate,
+        // and any wrap still snaps the separation exactly and click-free.
+        const auto quieterPos = juce::jlimit (0.0f, 1.0f, (tapDelaySamples[quieter] - (baseSamples - sepSamples)) / (2.0f * sepSamples));
+        const auto quieterGain = std::sin (juce::MathConstants<float>::pi * quieterPos)
+                                  * juce::jlimit (0.0f, 1.0f, (tapDelaySamples[quieter] - minCausalDelaySamples) * (1.0f / causalFadeSamples));
+
+        const auto boosted = baseSamples - sepSamples < minCausalDelaySamples && quieterGain < causalCatchupMaxGain;
+        const auto slewLimit = boosted ? causalCatchupSlewPerSample : maxSepSlewPerSample;
+        const auto step = juce::jlimit (-slewLimit, slewLimit, sepError);
 
         // Widening (step > 0) pushes the quieter tap away from the other
         // tap; narrowing pulls it in. Direction depends on which side of
@@ -91,9 +120,18 @@ float SpreadPitch::Voice::processSample (float input, float baseSamples, float s
         // a coherent in-phase sum then has constant AMPLITUDE, i.e. a flat
         // envelope. windowBlend == 0 reproduces the v0.5.0 law exactly.
         const auto s = std::sin (juce::MathConstants<float>::pi * posInGrain);
-        const auto gain = s * (1.0f - windowBlend + windowBlend * s);
+        auto gain = s * (1.0f - windowBlend + windowBlend * s);
 
-        const auto delayClamped = juce::jlimit (2.0f, maxDelay, tapDelaySamples[tap]);
+        // Causal-floor fade (issue #28): belt-and-braces for the transient
+        // where the live separation still exceeds the causal cap - a tap
+        // whose ideal position is at or below the read clamp is silenced
+        // instead of contributing an unshifted, clamp-delayed dry copy. In
+        // any converged (capped) window the lower edge sits at or above the
+        // floor, so this at most reshapes the outermost 64 samples of the
+        // window, where the sin gain is already near zero.
+        gain *= juce::jlimit (0.0f, 1.0f, (tapDelaySamples[tap] - minCausalDelaySamples) * (1.0f / causalFadeSamples));
+
+        const auto delayClamped = juce::jlimit (minCausalDelaySamples, maxDelay, tapDelaySamples[tap]);
         const auto updateReadPointer = tap == 1; // advance the shared write/read cursor exactly once per input sample
         outSample += delayLine.popSample (0, delayClamped, updateReadPointer) * gain;
     }

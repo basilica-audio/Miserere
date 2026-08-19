@@ -138,6 +138,11 @@ level ripple sustained tones used to meet (see Known limitations). Unpitched mat
 the tracker below its confidence gate and passes through the identical v0.5.0 path. The
 tracker only ever reads signal history — reported latency stays 0.
 
+Also since v0.6.0 the crossfade geometry stays causal at short **Time** settings: below 100%
+the tap spacing shrinks with the base delay (down to ~15 ms at 50%), which slightly quickens
+the splice cadence. Previously a tap could sit against the delay line's lower bound for
+stretches of a second or more and leak an unshifted copy of the input into the return.
+
 ### ④ SLAP — single-repeat dark delay
 
 **Time** (50–160 ms, default 110 ms, plain milliseconds — deliberately not tempo-synced).
@@ -238,7 +243,11 @@ oversampling is for, and it costs latency.
   lowest fundamental down to 80 Hz; re-alignment takes roughly a second after a note lands
   (longer for very low notes, so very short notes ride mostly on the standard path), and fast
   vibrato can outrun it — a brief return of the old mild shimmer, which reads as natural
-  doubling.
+  doubling. Below Time 100% the causal cap on the tap spacing progressively overrides the
+  period-aligned spacing (the up voice first), so the sustained-tone protection fades back
+  toward the v0.5.0 behaviour as Time shrinks — by ~60% Time it is effectively off. What can
+  no longer happen at any Time setting is the pre-v0.6.0 dry leak from a tap parked at the
+  delay line's lower bound.
 - The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
   milestone M3); the preset bar is a plain functional strip, not yet restyled.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
