@@ -7,6 +7,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <atomic>
+
 #include <vector>
 
 // The middle of the SANDWICH bus's Passive EQ -> Opto Leveler -> Passive EQ
@@ -89,7 +91,7 @@ public:
 
     // Current gain reduction in dB (positive = reduction), peak across
     // channels in the last processed block - exposed for metering/tests.
-    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb; }
+    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb.load (std::memory_order_relaxed); }
 
 private:
     // Divider network (research-opto-la2a.md section 2.1).
@@ -138,7 +140,9 @@ private:
     float postAttenuatorCompensation = 1.0f;
     double darkGain = 1.0;
 
-    float currentGainReductionDb = 0.0f;
+    // Written once per processed block on the audio thread, read by the
+    // GUI meter timer (M3 needle meters) - relaxed atomic on both sides.
+    std::atomic<float> currentGainReductionDb { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OptoLeveler)
 };

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — M3 custom vector editor and accessible parameter surface
+
+- **Vector editor** (#25) — the functional slider/knob editor is replaced by a fully
+  vector-drawn GUI in the suite's black/gold language: pointer knobs with engraved scale
+  rings (choice parameters get one engraved detent tick per position), lamp toggles, one
+  faceplate panel per bus (Global / Direct / Crush / Sandwich / Spread / Slap), a restyled
+  preset bar, and EB Garamond (OFL) as the embedded suite serif. No photoreal PNG assets —
+  everything is drawn at runtime by `BasilicaLookAndFeel` and the `src/gui` components.
+- **Per-bus needle meters** — vector gain-reduction needle meters for the three GR sources
+  the engine exposes (Direct FET, CRUSH, SANDWICH opto), with GUI-thread ballistic
+  smoothing fed by a 30 Hz poll of the engine's per-block metering (now relaxed-atomic on
+  both sides).
+- **Accessible parameter surface** (#26) — designed in from the start, not retrofitted:
+  every control is keyboard-focusable and steppable (Arrow 1 %, Shift+Arrow 0.1 %,
+  PageUp/Down 10 %, Home/End extremes, one detent per press on choice knobs; Ctrl/Alt/Cmd
+  left to the host), Shift-drag fine mouse adjustment, visible focus rings on every
+  control, unit-suffixed accessible value strings (set after the `SliderAttachment` to
+  survive JUCE 8.0.14's `textFromValueFunction` clobber), per-bus accessibility focus
+  containers (screen readers hear "Crush Bus, Ratio"; Tab still walks the whole editor),
+  read-only accessible dB values on the meters, and WCAG-AA-contrast-locked colour pairs.
+- New test suites under `tests/gui/`: editor accessibility (names/values/roles, keyboard
+  stepping, focus containers), needle-meter ballistics/angle mapping/NaN sanitisation,
+  WCAG contrast on the exact rendered colour pairs, and layout invariants (containment,
+  no overlap, one control per parameter, label-in-name).
+
 ## [0.5.0] — 2026-07-27
 
 The "Circuit Engines" release. Every per-bus module that used to be a textbook

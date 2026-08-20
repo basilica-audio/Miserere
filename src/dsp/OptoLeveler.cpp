@@ -45,7 +45,7 @@ void OptoLeveler::reset()
     for (auto& filter : emphasisFilters)
         filter.reset();
 
-    currentGainReductionDb = 0.0f;
+    currentGainReductionDb.store (0.0f, std::memory_order_relaxed);
 }
 
 void OptoLeveler::setPeakReductionProportion (float newAmount01) noexcept
@@ -155,5 +155,5 @@ void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
         }
     }
 
-    currentGainReductionDb = peakGainReductionDb;
+    currentGainReductionDb.store (peakGainReductionDb, std::memory_order_relaxed);
 }

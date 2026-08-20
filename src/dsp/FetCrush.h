@@ -4,6 +4,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <atomic>
+
 #include <vector>
 
 // Bus (1) CRUSH: a FET-style limiter driven the way an "all-buttons" unit
@@ -123,7 +125,7 @@ public:
 
     // Current gain reduction in dB (positive = reduction), peak across
     // channels in the last processed block - exposed for metering/tests.
-    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb; }
+    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb.load (std::memory_order_relaxed); }
 
     // The discrete per-ratio bias tuple (exposed for tests).
     struct BiasTuple
@@ -207,7 +209,9 @@ private:
     float attackUs = attackMaxUs;
     float releaseMs = releaseMaxMs;
 
-    float currentGainReductionDb = 0.0f;
+    // Written once per processed block on the audio thread, read by the
+    // GUI meter timer (M3 needle meters) - relaxed atomic on both sides.
+    std::atomic<float> currentGainReductionDb { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FetCrush)
 };
