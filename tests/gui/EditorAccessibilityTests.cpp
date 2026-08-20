@@ -145,6 +145,10 @@ TEST_CASE ("Choice knobs announce the current choice by NAME, not by index", "[g
         { "Direct Path", "HPF Freq", "80 Hz" },   // default choice index 1
         { "Sandwich Bus", "Pre LF Freq", "100 Hz" }, // default choice index 3
 
+        // Issue #20 colour knobs: detented PointerKnobs like every other
+        // choice, announcing the colour NAME.
+        { "Direct Path", "Character", "FET" },    // default choice index 0
+        { "Sandwich Bus", "Colour", "Classic" },  // default choice index 0
     };
 
     for (const auto& expectation : expectations)
@@ -192,10 +196,10 @@ TEST_CASE ("Every interactive control is keyboard-focusable", "[gui][a11y]")
         CHECK (toggle.getTitle().isNotEmpty());
     });
 
-    // 43 float + 11 choice parameters = 54 knobs; 17 bool parameters = 17
+    // 43 float + 13 choice parameters = 56 knobs; 17 bool parameters = 17
     // toggles (see ParameterIds.h). A zero-match walk must not pass
     // vacuously.
-    CHECK (slidersSeen == 54);
+    CHECK (slidersSeen == 56);
     CHECK (togglesSeen == 17);
 
     // The preset bar's buttons are stock juce::TextButtons - focusable by
@@ -407,7 +411,7 @@ TEST_CASE ("Each bus is an accessibility focus container that does not trap Tab"
     }
 
     // Every interactive control lives inside exactly one of the six bus
-    // panels (non-vacuous: the walk must find all 71).
+    // panels (non-vacuous: the walk must find all 73).
     int controlsChecked = 0;
 
     const auto isInsideExactlyOnePanel = [&] (juce::Component& control)
@@ -425,7 +429,7 @@ TEST_CASE ("Each bus is an accessibility focus container that does not trap Tab"
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider& s) { isInsideExactlyOnePanel (s); });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { isInsideExactlyOnePanel (t); });
 
-    CHECK (controlsChecked == 71);
+    CHECK (controlsChecked == 73);
 }
 
 TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per bus", "[gui][a11y]")

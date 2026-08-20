@@ -18,8 +18,8 @@ TEST_CASE ("Every frozen parameter ID exists in the layout", "[parameters]")
         ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass, ParamIDs::link, ParamIDs::parallelTrim,
 
         ParamIDs::directDeessPreEnabled, ParamIDs::directDeessPreFreq, ParamIDs::directDeessPreThreshold,
-        ParamIDs::directFetEnabled, ParamIDs::directFetThreshold, ParamIDs::directFetAttack,
-        ParamIDs::directFetRelease, ParamIDs::directFetMakeup,
+        ParamIDs::directFetEnabled, ParamIDs::directFetColour, ParamIDs::directFetThreshold,
+        ParamIDs::directFetAttack, ParamIDs::directFetRelease, ParamIDs::directFetMakeup,
         ParamIDs::directEqHpfEnabled, ParamIDs::directEqHpfFreq, ParamIDs::directEqLowFreq, ParamIDs::directEqLowGain,
         ParamIDs::directEqMidFreq, ParamIDs::directEqMidGain, ParamIDs::directEqHighGain, ParamIDs::directEqDrive,
         ParamIDs::directSatDrive,
@@ -31,7 +31,7 @@ TEST_CASE ("Every frozen parameter ID exists in the layout", "[parameters]")
         ParamIDs::sandPreLfFreq, ParamIDs::sandPreLfBoost, ParamIDs::sandPreLfCut,
         ParamIDs::sandPreHfBellFreq, ParamIDs::sandPreHfBellBoost, ParamIDs::sandPreHfBellBandwidth,
         ParamIDs::sandPreHfShelfFreq, ParamIDs::sandPreHfShelfAtten,
-        ParamIDs::sandPeakRed, ParamIDs::sandLimit, ParamIDs::sandEmphasis, ParamIDs::sandResidual,
+        ParamIDs::sandPeakRed, ParamIDs::sandLimit, ParamIDs::sandColour, ParamIDs::sandEmphasis, ParamIDs::sandResidual,
         ParamIDs::sandPostLfFreq, ParamIDs::sandPostLfBoost, ParamIDs::sandPostLfCut,
         ParamIDs::sandPostHfBellFreq, ParamIDs::sandPostHfBellBoost, ParamIDs::sandPostHfBellBandwidth,
         ParamIDs::sandPostHfShelfFreq, ParamIDs::sandPostHfShelfAtten,
@@ -69,6 +69,8 @@ TEST_CASE ("Choice parameters carry the brief's selections in shared-table order
 
     checkChoices (ParamIDs::crushRatio, msrr::crushRatioChoices);
     checkChoices (ParamIDs::crushStyle, msrr::crushStyleChoices);
+    checkChoices (ParamIDs::directFetColour, msrr::directFetColourChoices);
+    checkChoices (ParamIDs::sandColour, msrr::sandColourChoices);
     checkChoices (ParamIDs::directEqHpfFreq, msrr::eqHpfFreqChoices);
     checkChoices (ParamIDs::directEqLowFreq, msrr::eqLowFreqChoices);
     checkChoices (ParamIDs::directEqMidFreq, msrr::eqMidFreqChoices);
@@ -77,6 +79,18 @@ TEST_CASE ("Choice parameters carry the brief's selections in shared-table order
     checkChoices (ParamIDs::sandPreHfShelfFreq, msrr::sandHfShelfFreqChoices);
 
     CHECK (msrr::crushRatioChoices.size() == 5);
+
+    // Issue #20: Gentle keeps index 1 (state files store raw indices);
+    // Vintage is strictly appended.
+    CHECK (msrr::crushStyleChoices.size() == 3);
+    CHECK (msrr::crushStyleChoices[0] == "All-Buttons");
+    CHECK (msrr::crushStyleChoices[1] == "Gentle");
+    CHECK (msrr::crushStyleChoices[2] == "Vintage");
+    CHECK (msrr::directFetColourChoices.size() == 3);
+    CHECK (msrr::directFetColourChoices[0] == "FET"); // index 0 = the pre-#20 voicing
+    CHECK (msrr::sandColourChoices.size() == 3);
+    CHECK (msrr::sandColourChoices[0] == "Classic"); // index 0 = the pre-#20 voicing
+
     CHECK (msrr::eqHpfFreqChoices.size() == static_cast<int> (msrr::eqHpfFreqHz.size()));
     CHECK (msrr::eqLowFreqChoices.size() == static_cast<int> (msrr::eqLowFreqHz.size()));
     CHECK (msrr::eqMidFreqChoices.size() == static_cast<int> (msrr::eqMidFreqHz.size()));
@@ -165,6 +179,13 @@ TEST_CASE ("Version hints: v0.5.0 newcomers are hint 2, pre-existing parameters 
         CHECK (hintOf (id) == 2);
     }
 
+    // v0.6.0 newcomers (issue #20) take the next generation's hint.
+    for (const auto* id : { ParamIDs::directFetColour, ParamIDs::sandColour })
+    {
+        INFO ("v0.6.0 parameter id = " << id);
+        CHECK (hintOf (id) == 3);
+    }
+
     // Spot-check across every section, including the SLAP bus the newcomers
     // joined - these must not have been dragged forward.
     for (const auto* id : { ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass, ParamIDs::link,
@@ -196,5 +217,22 @@ TEST_CASE ("v0.5.0 parameters: ranges and neutral defaults per brief section 4",
         // the modulation and noise layers are structurally off and a v0.4.0
         // session renders unchanged.
         CHECK (param->convertFrom0to1 (param->getDefaultValue()) == Catch::Approx (0.0f).margin (1.0e-6));
+    }
+}
+
+TEST_CASE ("v0.6.0 colour parameters default to the pre-#20 voicing (index 0)", "[parameters][versionhint][colour]")
+{
+    MiserereAudioProcessor processor;
+
+    // Binding compatibility promise (issue #20): both colour choices
+    // default to index 0 - the exact previous behaviour - so a v0.5.0
+    // session renders unchanged.
+    for (const auto* id : { ParamIDs::directFetColour, ParamIDs::sandColour })
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+
+        INFO ("parameter id = " << id);
+        CHECK (param->getIndex() == 0);
     }
 }

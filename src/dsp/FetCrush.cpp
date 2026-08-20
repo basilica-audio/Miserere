@@ -12,19 +12,32 @@ FetCrush::BiasTuple FetCrush::biasTupleFor (Ratio r, Style s) noexcept
     if (s == Style::gentle)
         return { -32.0f, 0.35f, 0.5f, 0.5f, 0.0f, 10.0f, 1.0f };
 
+    BiasTuple tuple { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f };
+
     switch (r)
     {
-        case Ratio::r4:   return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f };
-        case Ratio::r8:   return { -28.0f, 1.4f, 1.0f, 1.2f, 0.0f, 10.0f, 1.0f };
-        case Ratio::r12:  return { -26.0f, 1.9f, 1.1f, 1.5f, 0.0f, 10.0f, 1.0f };
-        case Ratio::r20:  return { -24.0f, 2.4f, 1.2f, 1.7f, 0.0f, 10.0f, 1.0f };
+        case Ratio::r4:   tuple = { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f }; break;
+        case Ratio::r8:   tuple = { -28.0f, 1.4f, 1.0f, 1.2f, 0.0f, 10.0f, 1.0f }; break;
+        case Ratio::r12:  tuple = { -26.0f, 1.9f, 1.1f, 1.5f, 0.0f, 10.0f, 1.0f }; break;
+        case Ratio::r20:  tuple = { -24.0f, 2.4f, 1.2f, 1.7f, 0.0f, 10.0f, 1.0f }; break;
         // ALL: loopGain = 1.2*1.3, eps x2, rectifier rail overdriven + all
         // ratio resistors in parallel (chargeScale) -> the under-damped
         // slam/overshoot/plateau bias state.
-        case Ratio::rAll: return { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f, 60.0f, 8.0f };
+        case Ratio::rAll: tuple = { -24.0f, 2.4f, 1.56f, 3.4f, 0.7f, 60.0f, 8.0f }; break;
     }
 
-    return { -30.0f, 0.8f, 0.8f, 1.0f, 0.0f, 10.0f, 1.0f };
+    // Vintage (issue #20): the same per-ratio tuple family with a hot early-
+    // revision bias state - see the Style enum's docs. The ratio selector
+    // stays fully active (unlike Gentle).
+    if (s == Style::vintage)
+    {
+        tuple.thresholdDb -= 2.0f;  // hotter rectifier bias: GR starts earlier
+        tuple.loopGain *= 1.12f;    // hotter loop: deeper GR, slightly looser
+        tuple.epsScale *= 2.2f;     // more residual-mismatch "hair"
+        tuple.chargeScale *= 1.3f;  // under-damped charge path
+    }
+
+    return tuple;
 }
 
 void FetCrush::prepare (const juce::dsp::ProcessSpec& spec)

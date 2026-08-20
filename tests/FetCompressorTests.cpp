@@ -143,6 +143,193 @@ TEST_CASE ("Direct FET: makeup gain shifts the output level by its dB value", "[
     CHECK (boosted - reference == Catch::Approx (6.0).margin (0.2));
 }
 
+//==============================================================================
+// Issue #20 - the Character switch (FET / VCA / Tube Mu). FET is index 0 and
+// all-zeros/unity by construction, so every test above (which never calls
+// setCharacter) doubles as the FET-is-the-legacy-voicing regression suite.
+
+TEST_CASE ("Direct FET: VCA character below the knee is a bit-exact null (transparency claim)", "[dsp][fet][character][null]")
+{
+    FetCompressor comp;
+    comp.setCharacter (FetCompressor::Character::vca);
+    comp.setRatio (4.0f);
+    comp.setThresholdDb (-18.0f);
+    comp.setMakeupDb (0.0f);
+    comp.prepare (makeTestSpec (2));
+
+    // VCA knee = 6 dB: reduction is an exact clamped 0 below
+    // threshold - 3 dB. -26 dBFS peak sits 5 dB under that edge.
+    juce::AudioBuffer<float> reference (2, 8192);
+    TestHelpers::fillWithSine (reference, testSampleRate, 440.0, 0.05f);
+
+    juce::AudioBuffer<float> processed;
+    processed.makeCopyOf (reference);
+
+    juce::dsp::AudioBlock<float> block (processed);
+    comp.process (block);
+
+    CHECK (TestHelpers::maxDifferenceDbfs (processed, reference) <= -200.0);
+    CHECK (comp.getCurrentGainReductionDb() == 0.0f);
+}
+
+TEST_CASE ("Direct FET: knee ordering near threshold - Mu compresses first, FET last", "[dsp][fet][character][knee]")
+{
+    const auto measureGr = [] (FetCompressor::Character character, float amplitude)
+    {
+        FetCompressor comp;
+        comp.setCharacter (character);
+        comp.setRatio (4.0f);
+        comp.setThresholdDb (-20.0f);
+        comp.setAttackMs (1.0f);
+        comp.setReleaseMs (100.0f);
+        comp.setMakeupDb (0.0f);
+        (void) measureGainChangeDb (comp, 1000.0, amplitude);
+        return comp.getCurrentGainReductionDb();
+    };
+
+    // -24 dBFS peak = 4 dB below threshold: inside Mu's 12 dB knee, outside
+    // VCA's 6 dB knee, and outside FET's hard knee.
+    const auto below4Amplitude = juce::Decibels::decibelsToGain (-24.0f);
+    CHECK (measureGr (FetCompressor::Character::fet, below4Amplitude) == 0.0f);
+    CHECK (measureGr (FetCompressor::Character::vca, below4Amplitude) == 0.0f);
+    CHECK (measureGr (FetCompressor::Character::tubeMu, below4Amplitude) > 0.05f);
+
+    // -22 dBFS peak = 2 dB below threshold: inside VCA's knee too, FET
+    // still exactly clean.
+    const auto below2Amplitude = juce::Decibels::decibelsToGain (-22.0f);
+    CHECK (measureGr (FetCompressor::Character::fet, below2Amplitude) == 0.0f);
+    CHECK (measureGr (FetCompressor::Character::vca, below2Amplitude) > 0.02f);
+}
+
+TEST_CASE ("Direct FET: Tube Mu adds GR-gated 2nd harmonic; FET and VCA stay clean", "[dsp][fet][character][harmonics]")
+{
+    const auto measureH2Ratio = [] (FetCompressor::Character character)
+    {
+        FetCompressor comp;
+        comp.setCharacter (character);
+        comp.setRatio (4.0f);
+        comp.setThresholdDb (-20.0f);
+        comp.setAttackMs (1.0f);
+        comp.setReleaseMs (100.0f);
+        comp.setMakeupDb (0.0f);
+        comp.prepare (makeTestSpec (1));
+
+        juce::AudioBuffer<float> buffer (1, testBlockSize);
+        TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.9f); // ~19 dB over threshold -> deep GR
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        comp.process (block);
+
+        const auto fundamental = TestHelpers::fftBinMagnitude (buffer, 0, settleSamples,
+                                                               testBlockSize - settleSamples, testSampleRate, 1000.0);
+        const auto second = TestHelpers::fftBinMagnitude (buffer, 0, settleSamples,
+                                                          testBlockSize - settleSamples, testSampleRate, 2000.0);
+        return second / juce::jmax (1.0e-12, fundamental);
+    };
+
+    const auto fetH2 = measureH2Ratio (FetCompressor::Character::fet);
+    const auto vcaH2 = measureH2Ratio (FetCompressor::Character::vca);
+    const auto muH2 = measureH2Ratio (FetCompressor::Character::tubeMu);
+
+    INFO ("H2/H1: FET = " << fetH2 << ", VCA = " << vcaH2 << ", Tube Mu = " << muH2);
+    CHECK (muH2 > 0.01);       // >= 1% second harmonic under deep GR
+    CHECK (fetH2 < 0.002);
+    CHECK (vcaH2 < 0.002);
+    CHECK (muH2 > fetH2 * 5.0);
+}
+
+TEST_CASE ("Direct FET: Tube Mu's attack is measurably slower than FET's at the same dial", "[dsp][fet][character][ballistics]")
+{
+    const auto earlyGr = [] (FetCompressor::Character character)
+    {
+        FetCompressor comp;
+        comp.setCharacter (character);
+        comp.setRatio (8.0f);
+        comp.setThresholdDb (-30.0f);
+        comp.setAttackMs (8.0f); // the layout default
+        comp.setReleaseMs (200.0f);
+        comp.prepare (makeTestSpec (1));
+
+        // 5 ms burst well above threshold + both knees: the knee no longer
+        // differentiates the characters up here, only the timing does.
+        juce::AudioBuffer<float> burst (1, 240);
+        TestHelpers::fillWithSine (burst, testSampleRate, 1000.0, 0.5f);
+        juce::dsp::AudioBlock<float> block (burst);
+        comp.process (block);
+
+        return comp.getCurrentGainReductionDb();
+    };
+
+    const auto fetEarly = earlyGr (FetCompressor::Character::fet);
+    const auto muEarly = earlyGr (FetCompressor::Character::tubeMu);
+
+    INFO ("GR after 5 ms: FET = " << fetEarly << " dB, Tube Mu = " << muEarly << " dB");
+    REQUIRE (fetEarly > 1.0f);
+    CHECK (muEarly < fetEarly - 1.0f);
+}
+
+TEST_CASE ("Direct FET: switching character mid-stream ramps instead of stepping", "[dsp][fet][character][automation]")
+{
+    constexpr int blockSize = 480;
+    constexpr int numBlocks = 60; // 600 ms
+    constexpr int switchBlock = 30;
+
+    const auto render = [&] (bool switchCharacter)
+    {
+        FetCompressor comp;
+        comp.setRatio (4.0f);
+        comp.setThresholdDb (-20.0f);
+        comp.setAttackMs (8.0f);
+        comp.setReleaseMs (200.0f);
+        comp.setMakeupDb (0.0f);
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = testSampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 1;
+        comp.prepare (spec);
+
+        juce::AudioBuffer<float> output (1, blockSize * numBlocks);
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            if (switchCharacter && b == switchBlock)
+                comp.setCharacter (FetCompressor::Character::tubeMu);
+
+            juce::AudioBuffer<float> chunk (1, blockSize);
+            TestHelpers::fillWithSine (chunk, testSampleRate, 1000.0, 0.35f, b * blockSize);
+            juce::dsp::AudioBlock<float> block (chunk);
+            comp.process (block);
+
+            output.copyFrom (0, b * blockSize, chunk, 0, 0, blockSize);
+        }
+
+        return output;
+    };
+
+    const auto maxStepFrom = [&] (const juce::AudioBuffer<float>& buffer, int fromSample)
+    {
+        const auto* data = buffer.getReadPointer (0);
+        float maxStep = 0.0f;
+
+        for (int i = juce::jmax (1, fromSample); i < buffer.getNumSamples(); ++i)
+            maxStep = juce::jmax (maxStep, std::abs (data[i] - data[i - 1]));
+
+        return maxStep;
+    };
+
+    const auto staticRender = render (false);
+    const auto switchedRender = render (true);
+
+    // The switch must not add a discontinuity beyond the sine's own
+    // sample-to-sample slope (50 ms smoothed knee/colour ramps).
+    const auto staticWorst = maxStepFrom (staticRender, blockSize * (switchBlock - 1));
+    const auto switchedWorst = maxStepFrom (switchedRender, blockSize * (switchBlock - 1));
+
+    INFO ("max per-sample step: static = " << staticWorst << ", switched = " << switchedWorst);
+    CHECK (switchedWorst <= staticWorst * 1.5f);
+}
+
 TEST_CASE ("Direct FET: reset() clears the envelope", "[dsp][fet][reset]")
 {
     FetCompressor comp;

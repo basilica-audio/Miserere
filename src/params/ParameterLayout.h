@@ -21,6 +21,8 @@ namespace msrr
     // layout strings and the DSP mapping can never drift apart.
     extern const juce::StringArray crushRatioChoices;
     extern const juce::StringArray crushStyleChoices;
+    extern const juce::StringArray directFetColourChoices;
+    extern const juce::StringArray sandColourChoices;
 
     extern const juce::StringArray eqHpfFreqChoices;
     extern const std::array<float, 4> eqHpfFreqHz;

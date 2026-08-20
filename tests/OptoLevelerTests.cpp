@@ -375,6 +375,163 @@ TEST_CASE ("Opto: Limit engages deeper GR than Compress at the same drive", "[ds
 }
 
 //==============================================================================
+// Issue #20 - the Colour switch (Classic / Quick / Deep). Classic is index 0
+// and all-unity by construction, so every test above (which never calls
+// setColour) doubles as the Classic-is-the-v0.5.0-voicing regression suite,
+// including the golden static curve.
+
+namespace
+{
+    // Time to recover to `fraction` of the colour's OWN settled GR after a
+    // 1 s hold - normalising per colour keeps the comparison about release
+    // SPEED, not about small GR-depth differences between the tuples.
+    double colourReleaseTime (OptoLeveler::Colour colour, float fraction, double holdSeconds = 1.0)
+    {
+        OptoLeveler opto;
+        opto.setColour (colour);
+        opto.setPeakReductionProportion (0.5f);
+        opto.prepare (makeTestSpec (1));
+
+        const auto grAtStop = driveToSettledGr (opto, 0.1f, holdSeconds);
+        REQUIRE (grAtStop > 4.0f);
+
+        const auto trace = releaseTrace (opto, 8.0);
+        return timeToRecoverBelow (trace, fraction * grAtStop);
+    }
+}
+
+TEST_CASE ("Opto: Quick releases faster, Deep slower than Classic (t50 ordering)", "[dsp][opto][colour][release]")
+{
+    const auto t50Classic = colourReleaseTime (OptoLeveler::Colour::classic, 0.5f);
+    const auto t50Quick = colourReleaseTime (OptoLeveler::Colour::quick, 0.5f);
+    const auto t50Deep = colourReleaseTime (OptoLeveler::Colour::deep, 0.5f);
+
+    INFO ("t50: Quick = " << t50Quick * 1e3 << " ms, Classic = " << t50Classic * 1e3
+          << " ms, Deep = " << t50Deep * 1e3 << " ms");
+
+    CHECK (t50Quick < t50Classic * 0.7);
+    CHECK (t50Deep > t50Classic * 1.3);
+}
+
+TEST_CASE ("Opto: Deep carries more release memory than Quick (t90 after a long hold)", "[dsp][opto][colour][memory]")
+{
+    const auto t90Quick = colourReleaseTime (OptoLeveler::Colour::quick, 0.1f, 5.0);
+    const auto t90Deep = colourReleaseTime (OptoLeveler::Colour::deep, 0.1f, 5.0);
+
+    INFO ("t90 after 5 s hold: Quick = " << t90Quick * 1e3 << " ms, Deep = " << t90Deep * 1e3 << " ms");
+    CHECK (t90Deep > t90Quick * 2.0);
+}
+
+TEST_CASE ("Opto: colour-stage harmonics order Deep > Classic > Quick (measured without GR)", "[dsp][opto][colour][harmonics]")
+{
+    const auto measureThd = [] (OptoLeveler::Colour colour)
+    {
+        constexpr int total = 24000;
+        constexpr int settle = 12000;
+
+        OptoLeveler opto;
+        opto.setColour (colour);
+        opto.setPeakReductionProportion (0.0f); // sidechain parked: colour stage only
+        opto.setEmphasisProportion (0.0f);
+        opto.prepare (makeTestSpec (1, total));
+
+        // -22 dBFS: low enough that even at parked Peak Reduction the EL
+        // panel stays dark (the audio itself lights it - there is no
+        // rectifier gate), high enough for a precise harmonic measurement.
+        juce::AudioBuffer<float> buffer (1, total);
+        TestHelpers::fillWithSine (buffer, testSampleRate, 1000.0, 0.08f);
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        opto.process (block);
+
+        REQUIRE (opto.getCurrentGainReductionDb() < 0.5f); // genuinely no compression in this measurement
+
+        return TestHelpers::estimateThdRatio (buffer, 0, settle, total - settle, testSampleRate, 1000.0);
+    };
+
+    const auto quickThd = measureThd (OptoLeveler::Colour::quick);
+    const auto classicThd = measureThd (OptoLeveler::Colour::classic);
+    const auto deepThd = measureThd (OptoLeveler::Colour::deep);
+
+    INFO ("colour-stage THD: Quick = " << quickThd << ", Classic = " << classicThd << ", Deep = " << deepThd);
+    CHECK (deepThd > classicThd * 1.2);
+    CHECK (classicThd > quickThd * 1.1);
+}
+
+TEST_CASE ("Opto: colours stay in the same GR-depth class at the same knob setting", "[dsp][opto][colour][calibration]")
+{
+    // The {nuN*k, muN*sqrt(k)} mobility compensation (see OptoLeveler.h's
+    // class comment) is supposed to keep the settled depth comparable so
+    // the colour switch changes CHARACTER, not the mix balance.
+    const auto settledGr = [] (OptoLeveler::Colour colour)
+    {
+        OptoLeveler opto;
+        opto.setColour (colour);
+        opto.setPeakReductionProportion (0.5f);
+        opto.prepare (makeTestSpec (1));
+        return driveToSettledGr (opto, 0.1f, 3.0);
+    };
+
+    const auto classicGr = settledGr (OptoLeveler::Colour::classic);
+    const auto quickGr = settledGr (OptoLeveler::Colour::quick);
+    const auto deepGr = settledGr (OptoLeveler::Colour::deep);
+
+    INFO ("settled GR: Classic = " << classicGr << " dB, Quick = " << quickGr << " dB, Deep = " << deepGr << " dB");
+    CHECK (std::abs (quickGr - classicGr) < 3.0f);
+    CHECK (std::abs (deepGr - classicGr) < 3.0f);
+}
+
+TEST_CASE ("Opto: switching colour mid-stream is click-free", "[dsp][opto][colour][automation]")
+{
+    constexpr int numBlocks = 100; // 1 s
+    constexpr int switchBlock = 50;
+
+    const auto render = [&] (bool switchColour)
+    {
+        OptoLeveler opto;
+        opto.setPeakReductionProportion (0.5f);
+        opto.prepare (makeTestSpec (1));
+
+        juce::AudioBuffer<float> output (1, blockSize * numBlocks);
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            if (switchColour && b == switchBlock)
+                opto.setColour (OptoLeveler::Colour::deep);
+
+            juce::AudioBuffer<float> chunk (1, blockSize);
+            TestHelpers::fillWithSine (chunk, testSampleRate, 1000.0, 0.1f, b * blockSize);
+            juce::dsp::AudioBlock<float> block (chunk);
+            opto.process (block);
+
+            output.copyFrom (0, b * blockSize, chunk, 0, 0, blockSize);
+        }
+
+        return output;
+    };
+
+    const auto maxStepFrom = [&] (const juce::AudioBuffer<float>& buffer, int fromSample)
+    {
+        const auto* data = buffer.getReadPointer (0);
+        float maxStep = 0.0f;
+
+        for (int i = juce::jmax (1, fromSample); i < buffer.getNumSamples(); ++i)
+            maxStep = juce::jmax (maxStep, std::abs (data[i] - data[i - 1]));
+
+        return maxStep;
+    };
+
+    const auto staticRender = render (false);
+    const auto switchedRender = render (true);
+
+    const auto staticWorst = maxStepFrom (staticRender, blockSize * (switchBlock - 1));
+    const auto switchedWorst = maxStepFrom (switchedRender, blockSize * (switchBlock - 1));
+
+    INFO ("max per-sample step: static = " << staticWorst << ", switched = " << switchedWorst);
+    CHECK (switchedWorst <= staticWorst * 1.5f);
+}
+
+//==============================================================================
 // Housekeeping.
 
 TEST_CASE ("Opto: reset() restores the dark equilibrium", "[dsp][opto][reset]")

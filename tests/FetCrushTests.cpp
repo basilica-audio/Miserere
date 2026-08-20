@@ -572,14 +572,14 @@ TEST_CASE ("Crush: linked - a hard-panned L-only burst produces GR on both chann
 namespace
 {
     double measureThdAtDrive (FetCrush::Ratio ratio, float driveDb, double frequencyHz, float amplitude,
-                              float releaseStep = 7.0f)
+                              float releaseStep = 7.0f, FetCrush::Style style = FetCrush::Style::allButtons)
     {
         constexpr int blockSize = 24000;
         constexpr int settle = 12000;
 
         FetCrush crush;
         crush.setRatio (ratio);
-        crush.setStyle (FetCrush::Style::allButtons);
+        crush.setStyle (style);
         crush.setInputDriveDb (driveDb);
         crush.setAttackStep (7.0f);
         crush.setReleaseStep (releaseStep);
@@ -622,6 +622,84 @@ TEST_CASE ("Crush: colour is LF-selective (transformer delta below ~150 Hz)", "[
 
     INFO ("80 Hz THD = " << lowFreqThd << ", 5 kHz THD = " << highFreqThd);
     CHECK (lowFreqThd > highFreqThd);
+}
+
+//==============================================================================
+// Issue #20 - the Vintage style: the per-ratio all-buttons tuple family in
+// a hot early-revision bias state (threshold -2 dB, loop x1.12, eps x2.2,
+// under-damped charge path). Character evidence is measured, not asserted
+// from the tuple numbers.
+
+TEST_CASE ("Crush: Vintage adds measurably more harmonic colour than All-Buttons", "[dsp][crush][vintage][colour]")
+{
+    // Slowest release isolates the eps-term (see the colour tests above).
+    const auto allButtonsThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f, 1.0f,
+                                                  FetCrush::Style::allButtons);
+    const auto vintageThd = measureThdAtDrive (FetCrush::Ratio::r20, 24.0f, 1000.0, 0.3f, 1.0f,
+                                               FetCrush::Style::vintage);
+
+    INFO ("THD: All-Buttons = " << allButtonsThd << ", Vintage = " << vintageThd);
+    CHECK (vintageThd > allButtonsThd * 1.3);
+}
+
+TEST_CASE ("Crush: Vintage bites earlier/deeper than All-Buttons at the same drive", "[dsp][crush][vintage]")
+{
+    const auto measureGr = [] (FetCrush::Style style)
+    {
+        FetCrush crush;
+        crush.setRatio (FetCrush::Ratio::r20);
+        crush.setStyle (style);
+        crush.setInputDriveDb (6.0f);
+        crush.setAttackStep (6.0f);
+        crush.setReleaseStep (6.0f);
+        (void) measureSettledGainDb (crush, 1000.0, 0.25f);
+        return crush.getCurrentGainReductionDb();
+    };
+
+    const auto allButtonsGr = measureGr (FetCrush::Style::allButtons);
+    const auto vintageGr = measureGr (FetCrush::Style::vintage);
+
+    INFO ("GR: All-Buttons = " << allButtonsGr << " dB, Vintage = " << vintageGr << " dB");
+    CHECK (vintageGr > allButtonsGr + 0.5f);
+}
+
+TEST_CASE ("Crush: Vintage keeps the ratio selector active (unlike Gentle) and stays clean below threshold", "[dsp][crush][vintage]")
+{
+    const auto measureVintageGr = [] (FetCrush::Ratio ratio)
+    {
+        FetCrush crush;
+        crush.setRatio (ratio);
+        crush.setStyle (FetCrush::Style::vintage);
+        crush.setInputDriveDb (0.0f);
+        crush.setAttackStep (6.0f);
+        crush.setReleaseStep (6.0f);
+        (void) measureSettledGainDb (crush, 1000.0, 0.25f);
+        return crush.getCurrentGainReductionDb();
+    };
+
+    // The 4:1 and 20:1 bias states must stay distinct under Vintage (the
+    // ratio row is NOT collapsed the way Gentle collapses it).
+    const auto grR4 = measureVintageGr (FetCrush::Ratio::r4);
+    const auto grR20 = measureVintageGr (FetCrush::Ratio::r20);
+    INFO ("Vintage GR: 4:1 = " << grR4 << " dB, 20:1 = " << grR20 << " dB");
+    CHECK (std::abs (grR4 - grR20) > 0.5f);
+
+    // Far below threshold the numbered-ratio Vintage tuples keep unity
+    // linear-region gain (linGainDb 0) and negligible colour.
+    FetCrush quiet;
+    quiet.setRatio (FetCrush::Ratio::r20);
+    quiet.setStyle (FetCrush::Style::vintage);
+    quiet.setInputDriveDb (0.0f);
+    quiet.setAttackStep (6.0f);
+    quiet.setReleaseStep (6.0f);
+    const auto quietGainDb = measureSettledGainDb (quiet, 1000.0, 0.005f); // -46 dBFS
+
+    INFO ("Vintage linear-region gain = " << quietGainDb << " dB");
+    CHECK (std::abs (quietGainDb) < 0.3);
+
+    const auto quietThd = measureThdAtDrive (FetCrush::Ratio::r20, 0.0f, 1000.0, 0.005f, 7.0f,
+                                             FetCrush::Style::vintage);
+    CHECK (quietThd < 0.002);
 }
 
 TEST_CASE ("Crush: output stays finite and bounded at full-scale drive", "[dsp][crush][robustness]")

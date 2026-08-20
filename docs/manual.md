@@ -44,7 +44,13 @@ Off by default, section by section, in signal order:
   the vocal's dynamics are greatest (the documented "de-ess at the very beginning" rule).
 - **FET Comp** — a light, threshold-based FET-style compressor, fixed 4:1, aiming for a
   gentle 3–4 dB of peak gain reduction — "the one place serial compression is authentic" in
-  this topology.
+  this topology. Since v0.6.0 a **Character** switch selects the insert-compressor family
+  (generic descriptors, as everywhere in this plugin): **FET** (the default — hard knee,
+  panel timing, clean; exactly the previous behaviour), **VCA** (clean bus-style voicing
+  with a 6 dB soft knee and a snappier attack; below the knee it is bit-transparent), and
+  **Tube Mu** (a wide 12 dB knee, slower attack, longer release, and a touch of
+  second-harmonic warmth that only appears while the compressor is actually working —
+  gain-reduction-gated, so unity passages stay clean).
 - **Console EQ** — a British-console-class grid: HPF (18 dB/oct, 50/80/160/300 Hz), low shelf
   (±16 dB, 35/60/110/220 Hz), a fixed-Q mid bell (±18 dB, six stepped centre frequencies), a
   fixed 12 kHz high shelf (±16 dB), and a Drive control blending subtle 2nd/3rd-leaning
@@ -72,9 +78,12 @@ No threshold knob: **Input** drives the signal into a fixed per-ratio threshold 
 give-back and a short attack lag that lets transients punch through before clamping — the
 "snap"). **Attack**/**Release** are 1–7 dials where a HIGHER number is FASTER, matching the
 hardware convention this is modelled on; release is program-dependent (fast after brief
-transients, several times slower after sustained heavy compression). **Style**
-switches between All-Buttons and a softer, fixed 2:1 **Gentle** voicing. This bus is meant to
-sound "terrible" soloed (use Audition) and good blended in.
+transients, several times slower after sustained heavy compression). **Style** selects
+the limiter's voicing: **All-Buttons** (default), a softer, fixed 2:1 **Gentle** voicing, or
+— since v0.6.0 — **Vintage**, an early-revision hot-bias state that keeps the full ratio row
+active but bites two dB earlier, runs the feedback loop hotter and more than doubles the FET
+cell's residual second-harmonic "hair", for a rattier, more coloured crush at the same
+settings. This bus is meant to sound "terrible" soloed (use Audition) and good blended in.
 
 CRUSH also carries a touch of program-dependent colour: as gain reduction builds, a
 transformer-style low-frequency saturation and the FET cell's own residual second harmonic
@@ -108,6 +117,14 @@ the memory effect — hold it down longer or harder and it lets go more slowly �
 program-dependent attack are all consequences of how charge carriers in the cell build up and
 drain away. There is no ratio control because there is no ratio parameter in the circuit;
 what you hear is the cell's own behaviour, which is the whole appeal of this style of leveler.
+
+Since v0.6.0 a **Colour** switch selects the cell's era: **Classic** (the default — the
+photocell calibration exactly as before), **Quick** (a later solid-state-era optical voicing:
+faster recovery, much less release memory, an almost clean output stage) and **Deep** (an
+earlier-era voicing: slower recovery, a longer memory tail, and a thicker tube/transformer
+output stage). The switch changes the cell's charge-carrier kinetics, not its level
+calibration — all three land in the same gain-reduction class at the same Peak Reduction
+setting, and swapping colours mid-performance is click-free.
 
 The LF Boost and Cut network is likewise now the hardware ladder's exact response. Two
 practical consequences: running Boost and Cut together gives the classic low-end shape (a lift
@@ -254,8 +271,9 @@ oversampling is for, and it costs latency.
   Shift-drag for fine mouse adjustment) and screen-reader accessible (per-bus grouping,
   unit-suffixed values). Final manual VoiceOver verification is tracked on the a11y issue.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
-  preset, swappable compressor colours beyond the two CRUSH styles, external sidechain, an
-  output limiter.
+  preset, external sidechain, an output limiter. (Swappable compressor colours per dynamics
+  slot shipped in v0.6.0 — the Direct FET's Character, CRUSH's third Style and SANDWICH's
+  Colour switches above.)
 - Dynamics detection is unlinked (independent L/R) by default on Crush and Sandwich; Link
   makes both channels track a shared detector.
 - The voicing throughout this plugin is **research-derived, not measured against hardware

@@ -47,6 +47,7 @@ namespace ParamIDs
     inline constexpr auto directDeessPreThreshold = "direct_deessPre_threshold";
 
     inline constexpr auto directFetEnabled = "direct_fet_enabled";
+    inline constexpr auto directFetColour = "direct_fet_colour"; // choice: FET / VCA / Tube Mu (issue #20, v0.6.0)
     inline constexpr auto directFetThreshold = "direct_fet_threshold";
     inline constexpr auto directFetAttack = "direct_fet_attack";
     inline constexpr auto directFetRelease = "direct_fet_release";
@@ -71,7 +72,7 @@ namespace ParamIDs
     // Bus (1) CRUSH - FET limiter, all-buttons character
     inline constexpr auto crushInput = "crush_input";     // 0-48 dB drive, no threshold knob
     inline constexpr auto crushRatio = "crush_ratio";     // choice: 4:1/8:1/12:1/20:1/ALL
-    inline constexpr auto crushStyle = "crush_style";     // choice: All-Buttons / Gentle
+    inline constexpr auto crushStyle = "crush_style";     // choice: All-Buttons / Gentle / Vintage (third choice appended in v0.6.0, issue #20)
     inline constexpr auto crushAttack = "crush_attack";   // 1-7, inverted taper (7 = fastest)
     inline constexpr auto crushRelease = "crush_release"; // 1-7, inverted taper (7 = fastest)
     inline constexpr auto crushOutput = "crush_output";   // makeup trim
@@ -93,6 +94,7 @@ namespace ParamIDs
 
     inline constexpr auto sandPeakRed = "sand_peakred";   // 0-100%, drive into the fixed static curve
     inline constexpr auto sandLimit = "sand_limit";       // knee ratio ~3:1 -> ~10:1
+    inline constexpr auto sandColour = "sand_colour";     // choice: Classic / Quick / Deep (issue #20, v0.6.0)
     inline constexpr auto sandEmphasis = "sand_emphasis"; // 0-100%, detector-only HF-selective compression
     inline constexpr auto sandResidual = "sand_residual"; // defeatable never-flat vintage residual, default ON
 

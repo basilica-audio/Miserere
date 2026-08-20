@@ -89,6 +89,7 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (direct, ParamIDs::directDeessPreFreq, "Pre Freq");
     addKnob (direct, ParamIDs::directDeessPreThreshold, "Pre Thresh");
     addToggle (direct, ParamIDs::directFetEnabled, "FET");
+    addKnob (direct, ParamIDs::directFetColour, "Character");
     addKnob (direct, ParamIDs::directFetThreshold, "Threshold");
     addKnob (direct, ParamIDs::directFetAttack, "Attack");
     addKnob (direct, ParamIDs::directFetRelease, "Release");
@@ -140,6 +141,7 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addRow (sandwich);
     addKnob (sandwich, ParamIDs::sandPeakRed, "Peak Reduction");
     addToggle (sandwich, ParamIDs::sandLimit, "Limit");
+    addKnob (sandwich, ParamIDs::sandColour, "Colour");
     addKnob (sandwich, ParamIDs::sandEmphasis, "Emphasis");
     addToggle (sandwich, ParamIDs::sandResidual, "Residual");
 
