@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-08-20
+
+The M3 GUI release. The functional slider editor becomes a fully vector-drawn, fully
+accessible instrument, every dynamics slot gains swappable classic-style voicings, and
+SPREAD stops combing on sustained tones — all of it still at zero reported latency.
 
 ### Added — swappable classic-style compressor colours per dynamics slot (#20)
 
@@ -65,6 +69,61 @@ opto).
   stepping, focus containers), needle-meter ballistics/angle mapping/NaN sanitisation,
   WCAG contrast on the exact rendered colour pairs, and layout invariants (containment,
   no overlap, one control per parameter, label-in-name).
+
+### Added — period-adaptive SPREAD splice: comb-free sustained tones (#19)
+
+- SPREAD's two crossfading taps interfere continuously (`env² = 1 + sin(2π·pos) ·
+  cos(2π·f·τ)`), so a sustained tone landing near an anti-phase tooth of the 1/τ comb
+  rippled by up to ~18 dB. The tap separation τ itself now adapts: a progressive
+  normalized-autocorrelation **PeriodDetector** (lowpassed, ~12 kHz-decimated history
+  ring, flat ~100 MACs/sample, every size fixed in `prepare()`) snaps the separation to a
+  whole number of detected periods on confident periodicity (NACF gate with 0.6/0.5
+  hysteresis), so the taps sum in phase at the fundamental and every harmonic, and
+  splices land phase-continuous.
+- The live separation converges via a masked micro-slew (≤ ~3.5 cents, applied on the
+  quieter tap) plus an exact click-free re-seat at window wraps; the crossfade law blends
+  sin → sin² (amplitude-complementary) gated on confidence *and* achieved alignment, so a
+  coherent in-phase sum has constant amplitude.
+- Measured: sustained-tone ripple uniformly ≤ 2.1 dB at any pitch (bar: 2.6 dB —
+  deliberately below the 3.01 dB a separation-only fix would show, pinning the sin² blend
+  too). Non-periodic treble-band material is bit-identical with the adaptation on or off
+  (the NACF gate is scale-invariant, so aliased treble cannot fake confidence), and
+  latency stays zero — the detector only reads already-written history.
+
+### Added — test-suite hardening (#29)
+
+- Allocation-guard **self-test**: the guard behind every `allocationCount() == 0`
+  assertion is now itself proven to fire on a real heap allocation (an elision-proof
+  direct `::operator new` canary with an observable `volatile` write, counted outside
+  Catch2's assertion macros) and to stay silent on pure stack work.
+- Sample-rate-matrix reprepare coverage (`tests/SampleRateMatrixTests.cpp`): one
+  processor instance reprepared across 44.1k → 96k → 192k → 44.1k with 16…16384-sample
+  blocks, all four busses and the v0.5.0 circuit paths engaged and churned between steps
+  — all-finite output, `getLatencySamples()` exactly 0 at every step, APVTS state
+  surviving every reprepare.
+- With the new `tests/gui/` and colour suites the whole suite now stands at **212 Catch2
+  test cases** (162 at v0.5.0).
+
+### Fixed
+
+- **SPREAD stays causal at `timeScale < 1`** (#28) — below ts ≈ 0.6 a voice's crossfade
+  window straddled zero delay, pinning a tap at the interpolator's 2-sample read clamp
+  with up to −3 dB of window gain: an unshifted dry copy of the input in the return,
+  ~1.7 s per traversal. Three guards inside `Voice` — a per-sample causal cap on the
+  separation target (seeded by `reset()` too, so a session restored at `timeScale` 0.5
+  starts causal), a 64-sample causal-floor fade that silences a tap still reaching the
+  clamp during fast downward Time automation, and a gain-gated 10× catch-up slew —
+  take the bleed from −13…−30 dB to −66…−80 dB (acceptance bar: −40 dB) on both voices.
+- **SANDWICH rests at exact zero after silence** (#15) — `PassiveEq`'s LF ladder is
+  genuinely first-order whenever one pot sits at exactly 0 (the normal case: every
+  shipped instance drives exactly one pot), but was bilinear-transformed at second
+  order, leaving a pole/zero pair at Nyquist that should cancel and, rounded to float,
+  no longer does — marginally unstable (radius 1.00000002) on the cut-only shape, so the
+  bus rang at ~−150 dBFS indefinitely once excited. The degenerate `(z+1)` factor is now
+  divided out analytically and the first-order transform emitted with exact-zero
+  second-order coefficients; the voicing is unchanged (old and new coefficients
+  re-derived independently and matched). Same undamped-Nyquist-pole hazard class as
+  `ConsoleEq`'s iron integrator, now recorded in `docs/architecture.md`.
 
 ## [0.5.0] — 2026-07-27
 
