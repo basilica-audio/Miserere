@@ -44,6 +44,8 @@ TEST_CASE ("Every frozen parameter ID exists in the layout", "[parameters]")
         ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition,
 
         ParamIDs::limiterEnabled, ParamIDs::limiterCeiling, ParamIDs::limiterRelease,
+
+        ParamIDs::directFetKeyExt, ParamIDs::crushKeyExt, ParamIDs::sandKeyExt,
     };
 
     for (const auto* id : allIds)
@@ -188,8 +190,10 @@ TEST_CASE ("Version hints: v0.5.0 newcomers are hint 2, pre-existing parameters 
         CHECK (hintOf (id) == 3);
     }
 
-    // v0.7.0 newcomers (issue #24, the output limiter) take hint 4.
-    for (const auto* id : { ParamIDs::limiterEnabled, ParamIDs::limiterCeiling, ParamIDs::limiterRelease })
+    // v0.7.0 newcomers (issues #24 output limiter and #23 external
+    // sidechain) take hint 4.
+    for (const auto* id : { ParamIDs::limiterEnabled, ParamIDs::limiterCeiling, ParamIDs::limiterRelease,
+                            ParamIDs::directFetKeyExt, ParamIDs::crushKeyExt, ParamIDs::sandKeyExt })
     {
         INFO ("v0.7.0 parameter id = " << id);
         CHECK (hintOf (id) == 4);

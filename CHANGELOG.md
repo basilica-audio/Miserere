@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — external sidechain input (#23)
+
+An optional **Sidechain** input bus, **disabled by default** so the default layout — the one
+auval and pluginval's default run see, and the one every existing session carries — is
+byte-identical to the pre-v0.7.0 plugin. `isBusesLayoutSupported()` admits the key disabled,
+mono or stereo alongside the existing "main out == main in, mono or stereo" rule; anything
+wider is refused rather than silently half-used.
+
+- Three independent switches, one per keyable detector, with no master switch:
+  `direct_fet_key_ext`, `crush_key_ext`, `sand_key_ext` (all default off, AU version hint 4),
+  surfaced as **Ext Key** lamps in the Direct Path, Crush and Sandwich panels. An absent or
+  disabled bus, or a host that sends no key, falls back to internal detection silently. A mono
+  key into a stereo instance keys both channels.
+- `processBlock()` now takes the audio path as the MAIN bus's view of the host buffer rather
+  than as the whole buffer, so the key channels are never processed as if they were audio, and
+  chunks the key in lockstep with the oversized-block chunking. The key is read-only and never
+  copied.
+
+**Topology note, stated plainly because it changes the sound:** CRUSH (`FetCrush`, whose
+rectifier is driven by `y[n-1]`) and SANDWICH (`OptoLeveler`, whose EL panel is driven by its
+own compressed output) are **feedback** topologies — their soft knee, emergent ratio and
+static curve all come out of those loops. An external key does not add a detector input to
+them; it **replaces the loop drive**, converting both into **feed-forward keyed compressors**
+while engaged, with a measurably different static curve. Measured on the same signal at the
+same settings (−22 dBFS tone, 0 dB Input): CRUSH produces ~3 dB of gain reduction with
+internal detection and ~21 dB when keyed with a copy of its own input. That is legitimate and
+useful, and it is documented as a different compressor rather than as "the same sound from a
+different detector source". The Direct FET was already feed-forward, so keying it really is a
+pure detector-source swap.
+
+- 9 new Catch2 test cases (233 total, up from 224): the default layout is unchanged and the
+  bus starts disabled; every disabled/mono/stereo combination is accepted and a wider key
+  refused; key switches with no bus enabled are a silent no-op; a stereo key drives CRUSH and
+  SANDWICH while the audio itself is too quiet to; a mono-key-into-stereo-main edge asserted
+  through `getBusBuffer (buffer, true, 1)` directly; the feedback-to-feed-forward curve
+  difference on both CRUSH and SANDWICH; the Direct FET's pure detector-source swap (silent
+  key leaves it fully open, hot key closes it); and the default-wire null plus zero latency
+  with a hot key present.
+
 ### Added — "BV Mode" factory preset (#21)
 
 A background/stacked-vocal starting point rather than a lead one: every return sits harder

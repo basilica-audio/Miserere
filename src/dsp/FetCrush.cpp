@@ -105,13 +105,21 @@ void FetCrush::setReleaseStep (float step1to7) noexcept
     releaseMs = juce::jmap (step, 1.0f, 7.0f, releaseMaxMs, releaseMinMs);
 }
 
-void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
+void FetCrush::process (juce::dsp::AudioBlock<float>& block,
+                        const juce::dsp::AudioBlock<const float>* externalKey) noexcept
 {
     const auto numChannels = block.getNumChannels();
     const auto numSamples = block.getNumSamples();
 
     if (numSamples == 0 || numChannels == 0)
         return;
+
+    // External sidechain (issue #23): the key REPLACES the feedback loop
+    // drive, turning this into a feed-forward keyed compressor - see the
+    // class comment. Fewer key channels than audio channels is legal (the
+    // last key channel is reused).
+    const auto keyChannels = externalKey != nullptr ? externalKey->getNumChannels() : 0;
+    const auto useKey = keyChannels > 0 && externalKey->getNumSamples() >= numSamples;
 
     // Exponential (per-branch analytic) Euler coefficients for the
     // single-cap two-path RC (research section 3.2). The calibration
@@ -220,6 +228,34 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
                 drivenForSidechain = static_cast<double> (block.getChannelPointer (sc)[sample]) * static_cast<double> (inputDriveLinear);
             }
 
+            // Keyed: the rectifier drive comes from the key (through the
+            // same input drive) instead of from the loop. The fixed-point
+            // iteration below then has nothing to converge - it recomputes
+            // the identical vC twice, harmlessly - because the detector no
+            // longer depends on the cell's own output.
+            if (useKey)
+            {
+                yEstimateAbs = 0.0;
+
+                if (linked)
+                {
+                    for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+                    {
+                        const auto keySample = externalKey->getChannelPointer (juce::jmin (channel, keyChannels - 1))[sample];
+
+                        if (std::isfinite (keySample))
+                            yEstimateAbs = std::max (yEstimateAbs, std::abs (static_cast<double> (keySample)));
+                    }
+                }
+                else
+                {
+                    const auto keySample = externalKey->getChannelPointer (juce::jmin (sc, keyChannels - 1))[sample];
+                    yEstimateAbs = std::isfinite (keySample) ? std::abs (static_cast<double> (keySample)) : 0.0;
+                }
+
+                yEstimateAbs *= static_cast<double> (inputDriveLinear);
+            }
+
             double vC = capVoltage[sc];
             double vCell = 0.0;
             double baseGain = 1.0;
@@ -255,7 +291,8 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
                 const auto vds = baseGain * drivenForSidechain;
                 const auto gainWithHair = baseGain * (1.0 - eps * vds * (vCell / pinchOffVolts) / (2.0 * (vCell + pinchOffVolts)));
 
-                yEstimateAbs = std::abs (gainWithHair * drivenForSidechain * linGain * static_cast<double> (outputTrimLinear));
+                if (! useKey)
+                    yEstimateAbs = std::abs (gainWithHair * drivenForSidechain * linGain * static_cast<double> (outputTrimLinear));
             }
 
             capVoltage[sc] = vC;

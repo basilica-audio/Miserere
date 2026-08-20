@@ -118,6 +118,7 @@ private:
     std::atomic<float>* directDeessPreFreq = nullptr;
     std::atomic<float>* directDeessPreThreshold = nullptr;
     std::atomic<float>* directFetEnabled = nullptr;
+    std::atomic<float>* directFetKeyExt = nullptr;
     std::atomic<float>* directFetColour = nullptr;
     std::atomic<float>* directFetThreshold = nullptr;
     std::atomic<float>* directFetAttack = nullptr;
@@ -142,6 +143,7 @@ private:
     std::atomic<float>* crushAttack = nullptr;
     std::atomic<float>* crushRelease = nullptr;
     std::atomic<float>* crushOutput = nullptr;
+    std::atomic<float>* crushKeyExt = nullptr;
 
     std::atomic<float>* sandPreLfFreq = nullptr;
     std::atomic<float>* sandPreLfBoost = nullptr;
@@ -156,6 +158,7 @@ private:
     std::atomic<float>* sandColour = nullptr;
     std::atomic<float>* sandEmphasis = nullptr;
     std::atomic<float>* sandResidual = nullptr;
+    std::atomic<float>* sandKeyExt = nullptr;
     std::atomic<float>* sandPostLfFreq = nullptr;
     std::atomic<float>* sandPostLfBoost = nullptr;
     std::atomic<float>* sandPostLfCut = nullptr;

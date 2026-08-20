@@ -84,7 +84,13 @@ public:
     // the prepared capacity (PluginProcessor additionally chunks oversized
     // host blocks so no audio is dropped - this trim is the engine's own
     // last-resort guard).
-    void process (juce::dsp::AudioBlock<float>& block) noexcept;
+    // `externalKey` (optional, may be null) is the host's sidechain input
+    // for this block (issue #23). It is offered to whichever of the three
+    // keyable detectors have been switched to external detection; a null
+    // key, a key with no channels, or a key shorter than `block` makes
+    // every module fall back to internal detection silently.
+    void process (juce::dsp::AudioBlock<float>& block,
+                  const juce::dsp::AudioBlock<const float>* externalKey = nullptr) noexcept;
 
     //==========================================================================
     // Global
@@ -113,6 +119,15 @@ public:
     void setDeessPreThresholdDb (float db) noexcept { deesserPre.setThresholdDb (db); }
 
     void setDirectFetEnabled (bool enabled) noexcept { directFetEnabled = enabled; }
+
+    // External-sidechain detection per keyable module (issue #23). The
+    // Direct FET is feed-forward, so keying it is a pure detector-source
+    // swap; CRUSH and SANDWICH are FEEDBACK topologies, so keying them
+    // converts them to feed-forward keyed compressors with measurably
+    // different static curves - see FetCrush.h/OptoLeveler.h.
+    void setDirectFetKeyExternal (bool useExternal) noexcept { directFetKeyExternal = useExternal; }
+    void setCrushKeyExternal (bool useExternal) noexcept { crushKeyExternal = useExternal; }
+    void setSandKeyExternal (bool useExternal) noexcept { sandKeyExternal = useExternal; }
     void setDirectFetCharacter (FetCompressor::Character c) noexcept { directFet.setCharacter (c); }
     void setDirectFetThresholdDb (float db) noexcept { directFet.setThresholdDb (db); }
     void setDirectFetAttackMs (float ms) noexcept { directFet.setAttackMs (ms); }
@@ -230,6 +245,9 @@ private:
     DeEsser deesserPre;
     FetCompressor directFet;
     bool directFetEnabled = false;
+    bool directFetKeyExternal = false;
+    bool crushKeyExternal = false;
+    bool sandKeyExternal = false;
     ConsoleEq consoleEq;
     TapeSat tapeSat;
     DeEsser deesserPost;

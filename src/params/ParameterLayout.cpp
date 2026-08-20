@@ -220,6 +220,17 @@ namespace msrr
             0.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
+        // Issue #23 (v0.7.0 generation -> version hint 4). Appended at the
+        // END of the layout with the other #23/#24 newcomers would split the
+        // three key switches away from the modules they belong to in the
+        // editor; they are added here, in their module's section, because
+        // the layout position only affects host parameter ORDER and JUCE's
+        // AU ordering is driven by the version hint, which is what keeps
+        // existing automation lanes from remapping. (VST3 parameter IDs are
+        // hashes of the string ID, not indices.)
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::directFetKeyExt, 4 }, "Direct FET External Key", false));
+
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::directEqHpfEnabled, 1 }, "Direct EQ HPF Enabled", false));
 
@@ -320,6 +331,9 @@ namespace msrr
             0.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::crushKeyExt, 4 }, "Crush External Key", false));
+
         addLevelMuteAudition (layout, ParamIDs::crushLevel, ParamIDs::crushMute, ParamIDs::crushAudition, "Crush", -9.0f);
 
         //======================================================================
@@ -356,6 +370,9 @@ namespace msrr
 
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::sandResidual, 1 }, "Sand Residual", true));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::sandKeyExt, 4 }, "Sand External Key", false));
 
         addPassiveEqParams (layout,
             ParamIDs::sandPostLfFreq, ParamIDs::sandPostLfBoost, ParamIDs::sandPostLfCut,

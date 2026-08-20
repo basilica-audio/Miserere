@@ -62,13 +62,21 @@ void FetCompressor::setThresholdDb (float newThresholdDb) noexcept
     thresholdSmoothed.setTargetValue (newThresholdDb);
 }
 
-void FetCompressor::process (juce::dsp::AudioBlock<float>& block) noexcept
+void FetCompressor::process (juce::dsp::AudioBlock<float>& block,
+                             const juce::dsp::AudioBlock<const float>* externalKey) noexcept
 {
     const auto numChannels = block.getNumChannels();
     const auto numSamples = block.getNumSamples();
 
     if (numSamples == 0 || numChannels == 0)
         return;
+
+    // External sidechain (issue #23): a key block with at least this
+    // block's length replaces the input as the detector's source. Fewer key
+    // channels than audio channels is legal - the last key channel is
+    // reused (mono key into a stereo path).
+    const auto keyChannels = externalKey != nullptr ? externalKey->getNumChannels() : 0;
+    const auto useKey = keyChannels > 0 && externalKey->getNumSamples() >= numSamples;
 
     const auto thresholdDb = thresholdSmoothed.skip (static_cast<int> (numSamples));
     const auto kneeDb = kneeSmoothed.skip (static_cast<int> (numSamples));
@@ -96,6 +104,7 @@ void FetCompressor::process (juce::dsp::AudioBlock<float>& block) noexcept
     for (size_t channel = 0; channel < numChannels && channel < envelopeState.size(); ++channel)
     {
         auto* data = block.getChannelPointer (channel);
+        const auto* key = useKey ? externalKey->getChannelPointer (juce::jmin (channel, keyChannels - 1)) : nullptr;
         auto& envelope = envelopeState[channel];
         auto& dcState = harmonicDcState[channel];
 
@@ -108,7 +117,10 @@ void FetCompressor::process (juce::dsp::AudioBlock<float>& block) noexcept
         {
             const auto inputSample = data[sample];
 
-            const auto rectified = inputSample * inputSample;
+            // The detector's source: the key when one is supplied, the
+            // input otherwise. Everything downstream is untouched.
+            const auto detectorSample = key != nullptr ? key[sample] : inputSample;
+            const auto rectified = std::isfinite (detectorSample) ? detectorSample * detectorSample : 0.0f;
             const auto coeff = rectified > envelope ? attackCoeff : releaseCoeff;
             envelope = static_cast<float> (coeff * envelope + (1.0 - coeff) * rectified);
 

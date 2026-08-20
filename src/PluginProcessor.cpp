@@ -118,7 +118,14 @@ namespace
 MiserereAudioProcessor::MiserereAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                          // External sidechain (issue #23), DISABLED by
+                          // default: the default layout stays byte-identical
+                          // to the pre-v0.7.0 one, so existing sessions and
+                          // auval/pluginval's default-layout runs see no
+                          // change at all. Hosts that want the key enable
+                          // the bus explicitly.
+                          .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
       presetManager (apvts, makePresetManagerConfig(), makeFactoryPresetAssets())
 {
@@ -136,6 +143,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     directDeessPreFreq = apvts.getRawParameterValue (ParamIDs::directDeessPreFreq);
     directDeessPreThreshold = apvts.getRawParameterValue (ParamIDs::directDeessPreThreshold);
     directFetEnabled = apvts.getRawParameterValue (ParamIDs::directFetEnabled);
+    directFetKeyExt = apvts.getRawParameterValue (ParamIDs::directFetKeyExt);
     directFetColour = apvts.getRawParameterValue (ParamIDs::directFetColour);
     directFetThreshold = apvts.getRawParameterValue (ParamIDs::directFetThreshold);
     directFetAttack = apvts.getRawParameterValue (ParamIDs::directFetAttack);
@@ -160,6 +168,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     crushAttack = apvts.getRawParameterValue (ParamIDs::crushAttack);
     crushRelease = apvts.getRawParameterValue (ParamIDs::crushRelease);
     crushOutput = apvts.getRawParameterValue (ParamIDs::crushOutput);
+    crushKeyExt = apvts.getRawParameterValue (ParamIDs::crushKeyExt);
 
     sandPreLfFreq = apvts.getRawParameterValue (ParamIDs::sandPreLfFreq);
     sandPreLfBoost = apvts.getRawParameterValue (ParamIDs::sandPreLfBoost);
@@ -174,6 +183,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     sandColour = apvts.getRawParameterValue (ParamIDs::sandColour);
     sandEmphasis = apvts.getRawParameterValue (ParamIDs::sandEmphasis);
     sandResidual = apvts.getRawParameterValue (ParamIDs::sandResidual);
+    sandKeyExt = apvts.getRawParameterValue (ParamIDs::sandKeyExt);
     sandPostLfFreq = apvts.getRawParameterValue (ParamIDs::sandPostLfFreq);
     sandPostLfBoost = apvts.getRawParameterValue (ParamIDs::sandPostLfBoost);
     sandPostLfCut = apvts.getRawParameterValue (ParamIDs::sandPostLfCut);
@@ -210,6 +220,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     jassert (inTrimDb != nullptr && outTrimDb != nullptr && bypassFlag != nullptr && bypassParameter != nullptr);
     jassert (linkFlag != nullptr && parallelTrimDb != nullptr);
     jassert (limiterEnabled != nullptr && limiterCeilingDb != nullptr && limiterReleaseMs != nullptr);
+    jassert (directFetKeyExt != nullptr && crushKeyExt != nullptr && sandKeyExt != nullptr);
     jassert (directDeessPreEnabled != nullptr && directDeessPreFreq != nullptr && directDeessPreThreshold != nullptr);
     jassert (directFetEnabled != nullptr && directFetColour != nullptr && directFetThreshold != nullptr && directFetAttack != nullptr);
     jassert (directFetRelease != nullptr && directFetMakeup != nullptr);
@@ -362,6 +373,9 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
     engine.setDeessPreThresholdDb (load (directDeessPreThreshold));
 
     engine.setDirectFetEnabled (loadBool (directFetEnabled));
+    engine.setDirectFetKeyExternal (loadBool (directFetKeyExt));
+    engine.setCrushKeyExternal (loadBool (crushKeyExt));
+    engine.setSandKeyExternal (loadBool (sandKeyExt));
     engine.setDirectFetCharacter (directFetCharacterFromIndex (choiceIndex (directFetColour)));
     engine.setDirectFetThresholdDb (load (directFetThreshold));
     engine.setDirectFetAttackMs (load (directFetAttack));
@@ -480,6 +494,20 @@ bool MiserereAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
     if (mainOut != mainIn)
         return false;
 
+    // External sidechain (issue #23): entirely optional. Disabled (the
+    // default), mono or stereo are all admissible, in any combination with
+    // a mono or stereo main path - a mono key into a stereo main bus is a
+    // normal host routing and the engine reuses the key's last channel for
+    // the remaining audio channels. Anything wider is refused rather than
+    // silently half-used.
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto sidechain = layouts.getChannelSet (true, 1);
+
+        if (! sidechain.isDisabled() && sidechain != mono && sidechain != stereo)
+            return false;
+    }
+
     return true;
 }
 
@@ -487,13 +515,21 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 {
     juce::ScopedNoDenormals noDenormals;
 
-    const auto totalNumInputChannels = getTotalNumInputChannels();
-    const auto totalNumOutputChannels = getTotalNumOutputChannels();
+    // Since v0.7.0 (issue #23) `buffer` may carry a sidechain bus after the
+    // main channels, so the audio path must be taken as the MAIN bus's own
+    // view rather than as the whole buffer - processing the raw buffer would
+    // run the engine over the key channels as if they were audio. With the
+    // sidechain disabled (the default) this view is the whole buffer, and
+    // behaviour is byte-identical to before.
+    auto mainBuffer = getBusBuffer (buffer, false, 0);
 
-    // Buses are constrained to in == out (mono or stereo), so this is
-    // normally a no-op, but it's cheap insurance against stray channels.
-    for (auto channel = totalNumInputChannels; channel < totalNumOutputChannels; ++channel)
-        buffer.clear (channel, 0, buffer.getNumSamples());
+    const auto mainNumInputChannels = getMainBusNumInputChannels();
+    const auto mainNumOutputChannels = getMainBusNumOutputChannels();
+
+    // The main buses are constrained to in == out (mono or stereo), so this
+    // is normally a no-op, but it's cheap insurance against stray channels.
+    for (auto channel = mainNumInputChannels; channel < mainNumOutputChannels; ++channel)
+        mainBuffer.clear (channel, 0, mainBuffer.getNumSamples());
 
     if (bypassFlag->load (std::memory_order_relaxed) >= 0.5f)
         return;
@@ -502,7 +538,26 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     // smoothers spread any change across samples regardless.
     updateEngineParameters();
 
-    juce::dsp::AudioBlock<float> fullBlock (buffer);
+    // The external key for this block, if the host has enabled the bus. Read
+    // only - never written - so it can reference the host's own memory with
+    // no copy. An absent or disabled bus leaves the block empty and every
+    // keyed detector falls back to internal detection.
+    juce::dsp::AudioBlock<const float> keyBlock;
+
+    if (const auto* sidechainBus = getBus (true, 1))
+    {
+        if (sidechainBus->isEnabled())
+        {
+            const auto keyBuffer = getBusBuffer (buffer, true, 1);
+
+            if (keyBuffer.getNumChannels() > 0)
+                keyBlock = juce::dsp::AudioBlock<const float> (keyBuffer.getArrayOfReadPointers(),
+                                                                static_cast<size_t> (keyBuffer.getNumChannels()),
+                                                                static_cast<size_t> (keyBuffer.getNumSamples()));
+        }
+    }
+
+    juce::dsp::AudioBlock<float> fullBlock (mainBuffer);
 
     // Oversized-block guard (a REAL clamp, not a jassert): hosts are
     // expected never to exceed the block size promised to prepareToPlay(),
@@ -517,7 +572,18 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     {
         const auto chunkLength = juce::jmin (chunkLimit, fullBlock.getNumSamples() - offset);
         auto chunk = fullBlock.getSubBlock (offset, chunkLength);
-        engine.process (chunk);
+
+        // The key is chunked in lockstep with the audio so a keyed detector
+        // sees exactly the samples that belong to the chunk it is judging.
+        if (keyBlock.getNumChannels() > 0 && offset + chunkLength <= keyBlock.getNumSamples())
+        {
+            const auto keyChunk = keyBlock.getSubBlock (offset, chunkLength);
+            engine.process (chunk, &keyChunk);
+        }
+        else
+        {
+            engine.process (chunk);
+        }
     }
 }
 
