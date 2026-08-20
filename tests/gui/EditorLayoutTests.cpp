@@ -57,15 +57,16 @@ TEST_CASE ("Every automatable parameter has exactly one attached control", "[gui
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider&) { ++sliders; });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton&) { ++toggles; });
 
-    // The APVTS carries 43 float + 13 choice + 17 bool parameters = 73
-    // (ParameterIds.h; the two #20 colour choices joined in v0.6.0). One
-    // knob per float/choice parameter, one toggle per bool parameter - no
-    // parameter may be left off the M3 surface, and no control may exist
-    // without a parameter.
-    CHECK ((int) processor.getParameters().size() == 73);
+    // The APVTS carries 45 float + 13 choice + 18 bool parameters = 76
+    // (ParameterIds.h; the two #20 colour choices joined in v0.6.0, the
+    // three #24 output-limiter parameters in v0.7.0). One knob per
+    // float/choice parameter, one toggle per bool parameter - no parameter
+    // may be left off the M3 surface, and no control may exist without a
+    // parameter.
+    CHECK ((int) processor.getParameters().size() == 76);
     CHECK (sliders + toggles == (int) processor.getParameters().size());
-    CHECK (sliders == 56);
-    CHECK (toggles == 17);
+    CHECK (sliders == 58);
+    CHECK (toggles == 18);
 }
 
 TEST_CASE ("Moving a knob moves its parameter - one wiring spot check per bus", "[gui][layout]")
@@ -169,9 +170,9 @@ TEST_CASE ("No two interactive controls or meters overlap", "[gui][layout]")
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { collect (t); });
     visitDescendants<basilica::gui::NeedleMeter> (editor, [&] (basilica::gui::NeedleMeter& m) { collect (m); });
 
-    // 56 knobs + 17 toggles + 3 meters - the pairwise scan below must not
+    // 58 knobs + 18 toggles + 4 meters - the pairwise scan below must not
     // pass vacuously on an empty collection.
-    REQUIRE (entries.size() == 76);
+    REQUIRE (entries.size() == 80);
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
@@ -242,6 +243,6 @@ TEST_CASE ("Every knob's visible label text matches its accessible title (label-
         }
     });
 
-    // Every one of the 56 knobs carries an attached, matching label.
-    CHECK (labelledKnobs == 56);
+    // Every one of the 58 knobs carries an attached, matching label.
+    CHECK (labelledKnobs == 58);
 }

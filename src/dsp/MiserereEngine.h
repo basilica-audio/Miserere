@@ -7,6 +7,7 @@
 #include "FetCompressor.h"
 #include "FetCrush.h"
 #include "OptoLeveler.h"
+#include "OutputLimiter.h"
 #include "PassiveEq.h"
 #include "SlapDelay.h"
 #include "SpreadPitch.h"
@@ -30,7 +31,7 @@
 //             -> (3) SPREAD   : dual micro-pitch (~30/50 ms, +/-cents, L/R)
 //             -> (4) SLAP     : ~110 ms dark single-repeat delay
 //        Sum (direct + returns, each scaled by its fader AND the Parallel
-//        macro trim) -> [Out Trim] -> out
+//        macro trim) -> [Out Trim] -> [Output Limiter, OFF by default] -> out
 //
 // THE CORE INVARIANT (v2's binding correction over v1): the direct path is
 // bit-transparent by default - every one of its sections defaults OFF - so
@@ -95,6 +96,15 @@ public:
         opto.setLinked (shouldBeLinked);
     }
     void setParallelTrimDb (float newTrimDb) noexcept;
+
+    // Output limiter (issue #24) - the last stage, after the Out Trim.
+    // OFF by default, and a bit-exact bypass while off, so the
+    // default-wire invariant is untouched. Its detection is permanently
+    // L/R-linked and deliberately NOT governed by setLinked() above - see
+    // OutputLimiter.h.
+    void setLimiterEnabled (bool enabled) noexcept { outputLimiter.setEnabled (enabled); }
+    void setLimiterCeilingDb (float db) noexcept { outputLimiter.setCeilingDb (db); }
+    void setLimiterReleaseMs (float ms) noexcept { outputLimiter.setReleaseMs (ms); }
 
     //==========================================================================
     // Direct path
@@ -189,9 +199,12 @@ public:
     float getDirectFetGainReductionDb() const noexcept { return directFet.getCurrentGainReductionDb(); }
     float getCrushGainReductionDb() const noexcept { return crush.getCurrentGainReductionDb(); }
     float getSandGainReductionDb() const noexcept { return opto.getCurrentGainReductionDb(); }
+    float getLimiterGainReductionDb() const noexcept { return outputLimiter.getCurrentGainReductionDb(); }
 
-    // Always 0: busses (1)/(2) are minimum-phase/causal, and busses (3)/(4)'s
-    // delays are the effects themselves, not compensation artefacts.
+    // Always 0: busses (1)/(2) are minimum-phase/causal, busses (3)/(4)'s
+    // delays are the effects themselves, not compensation artefacts, and
+    // the output limiter is causal with no lookahead by mandate (issue #24
+    // - which is exactly why its ceiling is sample-peak, not true-peak).
     static constexpr int getLatencySamples() noexcept { return 0; }
 
     static constexpr int numBusses = 4; // Crush, Sandwich, Spread, Slap (Direct is not a fader-bearing "bus")
@@ -228,6 +241,9 @@ private:
     PassiveEq sandwichPostEq;
     SpreadPitch spread;
     SlapDelay slap;
+
+    // Final safety stage, after the Out Trim (issue #24).
+    OutputLimiter outputLimiter;
 
     // Working buffers: the processed direct-path signal, and one per
     // parallel bus, sized to the maximum block/channel count in prepare()

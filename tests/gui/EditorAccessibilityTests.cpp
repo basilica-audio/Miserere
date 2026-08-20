@@ -196,11 +196,11 @@ TEST_CASE ("Every interactive control is keyboard-focusable", "[gui][a11y]")
         CHECK (toggle.getTitle().isNotEmpty());
     });
 
-    // 43 float + 13 choice parameters = 56 knobs; 17 bool parameters = 17
+    // 45 float + 13 choice parameters = 58 knobs; 18 bool parameters = 18
     // toggles (see ParameterIds.h). A zero-match walk must not pass
     // vacuously.
-    CHECK (slidersSeen == 56);
-    CHECK (togglesSeen == 17);
+    CHECK (slidersSeen == 58);
+    CHECK (togglesSeen == 18);
 
     // The preset bar's buttons are stock juce::TextButtons - focusable by
     // default, and none may have opted out. Save/Delete start DISABLED
@@ -429,7 +429,7 @@ TEST_CASE ("Each bus is an accessibility focus container that does not trap Tab"
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider& s) { isInsideExactlyOnePanel (s); });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { isInsideExactlyOnePanel (t); });
 
-    CHECK (controlsChecked == 73);
+    CHECK (controlsChecked == 76);
 }
 
 TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per bus", "[gui][a11y]")
@@ -438,7 +438,8 @@ TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per
     processor.prepareToPlay (48000.0, 512);
     MiserereAudioProcessorEditor editor (processor);
 
-    const char* meterTitles[] = { "Direct FET gain reduction meter",
+    const char* meterTitles[] = { "Limiter gain reduction meter",
+                                  "Direct FET gain reduction meter",
                                   "Crush gain reduction meter",
                                   "Sandwich gain reduction meter" };
 
@@ -467,10 +468,11 @@ TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per
         CHECK (valueInterface->getCurrentValueAsString() == "6.4 dB");
     }
 
-    CHECK (metersSeen == 3);
+    CHECK (metersSeen == 4);
 
-    // ...and there are exactly three (one per exposed GR source), no strays.
+    // ...and there are exactly four (one per exposed GR source, the output
+    // limiter's included since v0.7.0), no strays.
     int totalMeters = 0;
     visitDescendants<basilica::gui::NeedleMeter> (editor, [&] (basilica::gui::NeedleMeter&) { ++totalMeters; });
-    CHECK (totalMeters == 3);
+    CHECK (totalMeters == 4);
 }

@@ -1,4 +1,4 @@
-# Miserere — user manual (v0.5.0)
+# Miserere — user manual (v0.7.0)
 
 *Four voices, one prayer — the parallel vocal template in a single unit.*
 
@@ -28,7 +28,8 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
         ├─→ ② SANDWICH : Passive EQ → Opto Leveler → Passive EQ    → return fader
         ├─→ ③ SPREAD   : dual micro-pitch (≈30/50 ms, ±cents, L/R) → return fader
         └─→ ④ SLAP     : ≈110 ms dark single-repeat delay          → return fader
-   Σ (direct + returns) → [Parallel macro trim scales returns ①–④] → [Out Trim] → out
+   Σ (direct + returns) → [Parallel macro trim scales returns ①–④] → [Out Trim]
+                        → [Output Limiter — off by default] → out
 ```
 
 Busses ①/② are minimum-phase and add zero latency, so they stay sample-aligned with the
@@ -203,6 +204,48 @@ It affects only the SLAP return, never the direct path. At 0 nothing is generate
 - **Parallel** is a macro trim (−24…+6 dB) that offsets all four return faders together — the
   "VCA ride back" gesture for quickly backing off the whole parallel layer.
 
+## Output limiter (v0.7.0)
+
+The last stage in the plugin, after Out Trim, with its own needle meter on the Global panel.
+**Off by default**, and while it is off it is a bit-exact bypass — the default wire stays a
+wire.
+
+- **Limiter** engages it. **Ceiling** (−12…0 dB, default −0.3 dB) is the level no output
+  sample may exceed. **Release** (5…500 ms, default 60 ms) is how quickly the gain recovers
+  once the peak has passed.
+- It is a **safety stage, not a colour device**. Attack is instantaneous (there is no
+  lookahead anywhere in this plugin), so deep, sustained reduction on bass-heavy material
+  will be audible as distortion before it is audible as level control. Use it to catch peaks,
+  not to squash a mix.
+- Detection is **always L/R-linked**, regardless of the global **Link** switch. Link chooses
+  dual-mono vs. linked detection for CRUSH and SANDWICH, where dual mono is part of the
+  sound; limiting each channel with its own gain would move the stereo image on every peak,
+  so the limiter does not offer that.
+- Once the signal is clear of the ceiling's soft knee (3 dB wide, centred on the ceiling) the
+  gain returns to exactly unity and the stage is bit-transparent again.
+
+**This is a sample-peak ceiling, not a true-peak ceiling — and it deliberately cannot be
+one.** True-peak limiting means detecting the reconstructed waveform *between* the samples,
+which requires oversampled detection, whose filters are delays; honouring their verdict means
+holding the audio back by that delay, i.e. lookahead. The zero-latency guarantee (see below)
+rules that out. What the limiter guarantees is that no output *sample* exceeds the Ceiling;
+the analogue waveform your converter reconstructs between those samples still can.
+
+Measured with an 8× windowed-sinc reconstruction (`tests/OutputLimiterTests.cpp`, where these
+figures are regression-frozen), at a −0.3 dB ceiling:
+
+| Programme | Inter-sample overshoot above the ceiling |
+|---|---|
+| 11.025 kHz tone at 44.1 kHz, phased so every sample straddles a crest (the analytic worst case for a sine) | **3.01 dB** |
+| 11 kHz tone, arbitrary phase | **0.71 dB** |
+| 1 kHz tone, 5 ms release | **0.06 dB** |
+
+Practically: on real programme material the overshoot is a fraction of a dB, and the 3 dB
+figure is the mathematical ceiling of what a sine can hide between samples, not a typical
+result. If you are delivering to a specification that mandates a true-peak limit (−1 dBTP for
+lossy encoding, for instance), set Ceiling with that headroom — or use a true-peak limiter at
+the end of your master chain, where its latency costs nothing.
+
 ## Presets
 
 A preset bar sits at the top of the editor: `[<] [PresetName*] [>] [Save] [Save As...]
@@ -270,10 +313,13 @@ oversampling is for, and it costs latency.
   SANDWICH), fully keyboard-operable (Arrow/Shift+Arrow/PageUp/PageDown/Home/End,
   Shift-drag for fine mouse adjustment) and screen-reader accessible (per-bus grouping,
   unit-suffixed values). Final manual VoiceOver verification is tracked on the a11y issue.
+- The output limiter (v0.7.0) enforces a **sample-peak** ceiling, not a true-peak one, and
+  cannot enforce a true-peak one without breaking the zero-latency guarantee — see the
+  measured inter-sample overshoot table in the Output limiter section above.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
-  preset, external sidechain, an output limiter. (Swappable compressor colours per dynamics
-  slot shipped in v0.6.0 — the Direct FET's Character, CRUSH's third Style and SANDWICH's
-  Colour switches above.)
+  preset, external sidechain. (Swappable compressor colours per dynamics slot shipped in
+  v0.6.0 — the Direct FET's Character, CRUSH's third Style and SANDWICH's Colour switches
+  above; the output limiter shipped in v0.7.0.)
 - Dynamics detection is unlinked (independent L/R) by default on Crush and Sandwich; Link
   makes both channels track a shared detector.
 - The voicing throughout this plugin is **research-derived, not measured against hardware

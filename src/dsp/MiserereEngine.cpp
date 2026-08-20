@@ -40,6 +40,8 @@ void MiserereEngine::prepare (const juce::dsp::ProcessSpec& spec)
     spread.prepare (spec);
     slap.prepare (spec);
 
+    outputLimiter.prepare (spec);
+
     const auto numChannels = static_cast<int> (spec.numChannels);
     const auto numSamples = static_cast<int> (spec.maximumBlockSize);
 
@@ -89,6 +91,8 @@ void MiserereEngine::reset()
     sandwichPostEq.reset();
     spread.reset(); // includes both micro-pitch delay lines
     slap.reset();   // includes the slap delay line
+
+    outputLimiter.reset(); // back to a settled unity gain
 }
 
 void MiserereEngine::setBusLevelDb (int busIndex, float levelDb) noexcept
@@ -225,4 +229,8 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
 
     juce::dsp::ProcessContextReplacing<float> outputContext (workingBlock);
     outTrimGain.process (outputContext);
+
+    // Final safety stage (issue #24): OFF by default and a bit-exact
+    // bypass while off, so the default path still ends at the Out Trim.
+    outputLimiter.process (workingBlock);
 }
