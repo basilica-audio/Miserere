@@ -248,8 +248,11 @@ oversampling is for, and it costs latency.
   toward the v0.5.0 behaviour as Time shrinks — by ~60% Time it is effectively off. What can
   no longer happen at any Time setting is the pre-v0.6.0 dry leak from a tap parked at the
   delay line's lower bound.
-- The GUI is a functional slider/knob editor (custom vector GUI with per-bus needle meters is
-  milestone M3); the preset bar is a plain functional strip, not yet restyled.
+- The GUI is the M3 custom vector editor: one faceplate panel per bus with pointer knobs,
+  engraved scale rings and per-bus gain-reduction needle meters (Direct FET, CRUSH,
+  SANDWICH), fully keyboard-operable (Arrow/Shift+Arrow/PageUp/PageDown/Home/End,
+  Shift-drag for fine mouse adjustment) and screen-reader accessible (per-bus grouping,
+  unit-suffixed values). Final manual VoiceOver verification is tracked on the a11y issue.
 - Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
   preset, swappable compressor colours beyond the two CRUSH styles, external sidechain, an
   output limiter.

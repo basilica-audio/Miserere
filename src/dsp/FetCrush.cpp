@@ -57,7 +57,7 @@ void FetCrush::reset()
     for (auto& stage : lfColourStages)
         stage.reset();
 
-    currentGainReductionDb = 0.0f;
+    currentGainReductionDb.store (0.0f, std::memory_order_relaxed);
 }
 
 void FetCrush::setRatio (Ratio newRatio) noexcept
@@ -307,5 +307,5 @@ void FetCrush::process (juce::dsp::AudioBlock<float>& block) noexcept
         }
     }
 
-    currentGainReductionDb = peakGainReductionDb;
+    currentGainReductionDb.store (peakGainReductionDb, std::memory_order_relaxed);
 }

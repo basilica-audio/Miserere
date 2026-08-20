@@ -2,6 +2,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <atomic>
+
 // The Direct path's "FET Comp light" (docs/design-brief.md): a simple,
 // threshold-based feed-forward FET-style compressor in classic insert
 // voicing - default 4:1, slow-ish attack, fast release, aiming for a light
@@ -48,7 +50,7 @@ public:
     // Current gain reduction in dB (positive value = that much reduction),
     // the peak across channels in the last processed block - exposed for
     // metering/tests, not required for correct audio processing.
-    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb; }
+    float getCurrentGainReductionDb() const noexcept { return currentGainReductionDb.load (std::memory_order_relaxed); }
 
 private:
     static constexpr double smoothingTimeSeconds = 0.05;
@@ -65,7 +67,9 @@ private:
     float makeupGainLinear = 1.0f;
     float lastThresholdDb = -18.0f;
 
-    float currentGainReductionDb = 0.0f;
+    // Written once per processed block on the audio thread, read by the
+    // GUI meter timer (M3 needle meters) - relaxed atomic on both sides.
+    std::atomic<float> currentGainReductionDb { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FetCompressor)
 };

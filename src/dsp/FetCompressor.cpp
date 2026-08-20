@@ -16,7 +16,7 @@ void FetCompressor::prepare (const juce::dsp::ProcessSpec& spec)
 void FetCompressor::reset()
 {
     std::fill (envelopeState.begin(), envelopeState.end(), 0.0f);
-    currentGainReductionDb = 0.0f;
+    currentGainReductionDb.store (0.0f, std::memory_order_relaxed);
 }
 
 void FetCompressor::setThresholdDb (float newThresholdDb) noexcept
@@ -67,5 +67,5 @@ void FetCompressor::process (juce::dsp::AudioBlock<float>& block) noexcept
         }
     }
 
-    currentGainReductionDb = peakGainReductionDb;
+    currentGainReductionDb.store (peakGainReductionDb, std::memory_order_relaxed);
 }
