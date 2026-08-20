@@ -145,12 +145,14 @@ TEST_CASE ("State round-trip preserves every choice parameter", "[state][choice]
 
     static constexpr const char* choiceIds[] = {
         ParamIDs::crushRatio,       // default index 4 ("ALL") -> set 0 ("4:1")
-        ParamIDs::crushStyle,       // default index 0 -> set 1 ("Gentle")
+        ParamIDs::crushStyle,       // default index 0 -> set 2 ("Vintage", normalised 1.0 of 3 choices)
+        ParamIDs::directFetColour,  // default index 0 -> set 2 ("Tube Mu")
+        ParamIDs::sandColour,       // default index 0 -> set 1 ("Quick", normalised 0.5)
         ParamIDs::directEqHpfFreq,  // default index 1 -> set 3
         ParamIDs::sandPreLfFreq,    // default index 3 -> set 0
         ParamIDs::sandPreHfBellFreq,
     };
-    static constexpr float nonDefaultNormalised[] = { 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+    static constexpr float nonDefaultNormalised[] = { 0.0f, 1.0f, 1.0f, 0.5f, 1.0f, 0.0f, 1.0f };
 
     std::vector<juce::RangedAudioParameter*> params;
     std::vector<float> savedValues;
@@ -212,6 +214,13 @@ TEST_CASE ("State migration: a v0.4.0 session loaded into a DIRTIED instance res
     REQUIRE (realValue (ParamIDs::slapWobble) == Catch::Approx (70.0f).margin (0.1f));
     REQUIRE (realValue (ParamIDs::slapAge) == Catch::Approx (40.0f).margin (0.1f));
 
+    // v0.6.0 colour params (issue #20): dirty them too, for the same
+    // replaceState-keeps-current-values failure mode.
+    setReal (ParamIDs::directFetColour, 2.0f); // Tube Mu
+    setReal (ParamIDs::sandColour, 2.0f);      // Deep
+    REQUIRE (realValue (ParamIDs::directFetColour) == Catch::Approx (2.0f));
+    REQUIRE (realValue (ParamIDs::sandColour) == Catch::Approx (2.0f));
+
     // Load the checked-in v0.4.0 fixture (no stateVersion property, no
     // wobble/age children).
     const auto fixtureFile = juce::File (MSRR_TEST_FIXTURE_DIR).getChildFile ("state_v0_4_0.xml");
@@ -235,9 +244,18 @@ TEST_CASE ("State migration: a v0.4.0 session loaded into a DIRTIED instance res
     // ...AND the v2-only parameters are back at their neutral defaults.
     CHECK (realValue (ParamIDs::slapWobble) == Catch::Approx (0.0f).margin (1.0e-4f));
     CHECK (realValue (ParamIDs::slapAge) == Catch::Approx (0.0f).margin (1.0e-4f));
+
+    // v0.6.0 colours reset to the pre-#20 voicing (index 0)...
+    CHECK (realValue (ParamIDs::directFetColour) == Catch::Approx (0.0f).margin (1.0e-4f));
+    CHECK (realValue (ParamIDs::sandColour) == Catch::Approx (0.0f).margin (1.0e-4f));
+
+    // ...and the fixture's stored crush_style = 1.0 still means GENTLE:
+    // state files carry the raw index, so appending "Vintage" as choice 2
+    // cannot re-map a saved Gentle selection (issue #20's append-only rule).
+    CHECK (realValue (ParamIDs::crushStyle) == Catch::Approx (1.0f).margin (1.0e-4f));
 }
 
-TEST_CASE ("State schema: re-save stamps stateVersion = 2; v2 -> v2 round-trip is lossless incl. wobble/age", "[state][migration][version]")
+TEST_CASE ("State schema: re-save stamps stateVersion = 3; round-trip is lossless incl. wobble/age", "[state][migration][version]")
 {
     MiserereAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
@@ -255,10 +273,11 @@ TEST_CASE ("State schema: re-save stamps stateVersion = 2; v2 -> v2 round-trip i
     juce::MemoryBlock saved;
     processor.getStateInformation (saved);
 
-    // The serialised tree carries stateVersion = 2.
+    // The serialised tree carries stateVersion = 3 (v0.6.0 colour layout,
+    // issue #20).
     const auto xml = juce::AudioProcessor::getXmlFromBinary (saved.getData(), static_cast<int> (saved.getSize()));
     REQUIRE (xml != nullptr);
-    CHECK (xml->getIntAttribute ("stateVersion", -1) == 2);
+    CHECK (xml->getIntAttribute ("stateVersion", -1) == 3);
 
     // Round-trip through a dirtied state is lossless for the new params.
     setReal (ParamIDs::slapWobble, 0.0f);

@@ -95,7 +95,16 @@ public:
     enum class Style
     {
         allButtons,
-        gentle
+        gentle,
+
+        // Issue #20: early-revision hot-bias voicing - the per-ratio
+        // all-buttons tuples with the rectifier bias dropped 2 dB (GR
+        // arrives earlier/deeper), the loop run ~12% hotter, the residual
+        // square-law mismatch more than doubled (audibly more 2nd-harmonic
+        // "hair" at the same GR) and an under-damped charge path. Selected
+        // by appending a third `crush_style` choice - existing sessions'
+        // stored indices 0/1 keep their meaning.
+        vintage
     };
 
     FetCrush() = default;

@@ -59,7 +59,9 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
   add only mild class-A-style asymmetric harmonics + transformer LF saturation,
   level-dependent, <0.5 % THD at moderate GR.
 - Style switch `crush_style`: **All-Buttons** (default) / **Gentle** (2:1, the later-era
-  rear-bus flavor: slow attack, release ≈6, 2–5 dB GR target).
+  rear-bus flavor: slow attack, release ≈6, 2–5 dB GR target) / **Vintage** (added v0.6.0,
+  issue #20: the per-ratio all-buttons tuples in a hot early-revision bias state — bias
+  −2 dB, loop ×1.12, residual-mismatch ×2.2, under-damped charge path).
 - Comfortably reaches 20+ dB GR without internal clipping; makeup keeps blend calibrated.
 
 ### ② SANDWICH — Passive EQ → Opto Leveler → Passive EQ (the dynamic-tilt trick)
@@ -145,9 +147,11 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
   research-derived, not measured against hardware units; say so.
 - Manual notes the technique's era (2010–2023 template workflow, as documented publicly)
   without implying endorsement by any person or brand.
-- Out of scope for v2 (explicitly): short plate reverb module, BV mode preset, swappable
-  compressor colors beyond the two crush styles, external sidechain, output limiter.
-  These are M2+/M3 candidates, tracked as issues.
+- Out of scope for v2 (explicitly): short plate reverb module, BV mode preset, external
+  sidechain, output limiter. These are M2+/M3 candidates, tracked as issues. (Swappable
+  compressor colours beyond the two crush styles were on this list until v0.6.0, when
+  issue #20 shipped them as per-slot engine voicing tuples: `direct_fet_colour`,
+  `crush_style`'s appended third choice, `sand_colour`.)
 
 ## Versioning
 

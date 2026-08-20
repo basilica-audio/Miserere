@@ -36,7 +36,32 @@ namespace
 
     FetCrush::Style crushStyleFromIndex (int index) noexcept
     {
-        return index == 0 ? FetCrush::Style::allButtons : FetCrush::Style::gentle;
+        switch (index)
+        {
+            case 1: return FetCrush::Style::gentle;
+            case 2: return FetCrush::Style::vintage;
+            default: return FetCrush::Style::allButtons;
+        }
+    }
+
+    FetCompressor::Character directFetCharacterFromIndex (int index) noexcept
+    {
+        switch (index)
+        {
+            case 1: return FetCompressor::Character::vca;
+            case 2: return FetCompressor::Character::tubeMu;
+            default: return FetCompressor::Character::fet;
+        }
+    }
+
+    OptoLeveler::Colour sandColourFromIndex (int index) noexcept
+    {
+        switch (index)
+        {
+            case 1: return OptoLeveler::Colour::quick;
+            case 2: return OptoLeveler::Colour::deep;
+            default: return OptoLeveler::Colour::classic;
+        }
     }
 
     // The small, Miserere-specific config surface PresetManager needs (see
@@ -107,6 +132,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     directDeessPreFreq = apvts.getRawParameterValue (ParamIDs::directDeessPreFreq);
     directDeessPreThreshold = apvts.getRawParameterValue (ParamIDs::directDeessPreThreshold);
     directFetEnabled = apvts.getRawParameterValue (ParamIDs::directFetEnabled);
+    directFetColour = apvts.getRawParameterValue (ParamIDs::directFetColour);
     directFetThreshold = apvts.getRawParameterValue (ParamIDs::directFetThreshold);
     directFetAttack = apvts.getRawParameterValue (ParamIDs::directFetAttack);
     directFetRelease = apvts.getRawParameterValue (ParamIDs::directFetRelease);
@@ -141,6 +167,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     sandPreHfShelfAtten = apvts.getRawParameterValue (ParamIDs::sandPreHfShelfAtten);
     sandPeakRed = apvts.getRawParameterValue (ParamIDs::sandPeakRed);
     sandLimit = apvts.getRawParameterValue (ParamIDs::sandLimit);
+    sandColour = apvts.getRawParameterValue (ParamIDs::sandColour);
     sandEmphasis = apvts.getRawParameterValue (ParamIDs::sandEmphasis);
     sandResidual = apvts.getRawParameterValue (ParamIDs::sandResidual);
     sandPostLfFreq = apvts.getRawParameterValue (ParamIDs::sandPostLfFreq);
@@ -179,7 +206,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     jassert (inTrimDb != nullptr && outTrimDb != nullptr && bypassFlag != nullptr && bypassParameter != nullptr);
     jassert (linkFlag != nullptr && parallelTrimDb != nullptr);
     jassert (directDeessPreEnabled != nullptr && directDeessPreFreq != nullptr && directDeessPreThreshold != nullptr);
-    jassert (directFetEnabled != nullptr && directFetThreshold != nullptr && directFetAttack != nullptr);
+    jassert (directFetEnabled != nullptr && directFetColour != nullptr && directFetThreshold != nullptr && directFetAttack != nullptr);
     jassert (directFetRelease != nullptr && directFetMakeup != nullptr);
     jassert (directEqHpfEnabled != nullptr && directEqHpfFreq != nullptr && directEqLowFreq != nullptr);
     jassert (directEqLowGain != nullptr && directEqMidFreq != nullptr && directEqMidGain != nullptr);
@@ -190,7 +217,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     jassert (sandPreLfFreq != nullptr && sandPreLfBoost != nullptr && sandPreLfCut != nullptr);
     jassert (sandPreHfBellFreq != nullptr && sandPreHfBellBoost != nullptr && sandPreHfBellBandwidth != nullptr);
     jassert (sandPreHfShelfFreq != nullptr && sandPreHfShelfAtten != nullptr);
-    jassert (sandPeakRed != nullptr && sandLimit != nullptr && sandEmphasis != nullptr && sandResidual != nullptr);
+    jassert (sandPeakRed != nullptr && sandLimit != nullptr && sandColour != nullptr && sandEmphasis != nullptr && sandResidual != nullptr);
     jassert (sandPostLfFreq != nullptr && sandPostLfBoost != nullptr && sandPostLfCut != nullptr);
     jassert (sandPostHfBellFreq != nullptr && sandPostHfBellBoost != nullptr && sandPostHfBellBandwidth != nullptr);
     jassert (sandPostHfShelfFreq != nullptr && sandPostHfShelfAtten != nullptr);
@@ -326,6 +353,7 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
     engine.setDeessPreThresholdDb (load (directDeessPreThreshold));
 
     engine.setDirectFetEnabled (loadBool (directFetEnabled));
+    engine.setDirectFetCharacter (directFetCharacterFromIndex (choiceIndex (directFetColour)));
     engine.setDirectFetThresholdDb (load (directFetThreshold));
     engine.setDirectFetAttackMs (load (directFetAttack));
     engine.setDirectFetReleaseMs (load (directFetRelease));
@@ -364,6 +392,7 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
 
     engine.setSandPeakReductionProportion (load (sandPeakRed) * 0.01f);
     engine.setSandLimitEnabled (loadBool (sandLimit));
+    engine.setSandColour (sandColourFromIndex (choiceIndex (sandColour)));
     engine.setSandEmphasisProportion (load (sandEmphasis) * 0.01f);
     engine.setSandResidualEnabled (loadBool (sandResidual));
 
@@ -505,10 +534,13 @@ void MiserereAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
 
-    // State schema stamp (v0.5.0): version 2 = the layout that introduced
-    // slap_wobble/slap_age. A missing property on load means version 1
-    // (v0.2.0-v0.4.0 layouts) - see setStateInformation().
-    state.setProperty ("stateVersion", 2, nullptr);
+    // State schema stamp: version 3 = the v0.6.0 layout that introduced
+    // direct_fet_colour/sand_colour and appended crush_style's third choice
+    // (issue #20); version 2 introduced slap_wobble/slap_age (v0.5.0). A
+    // missing property on load means version 1 (v0.2.0-v0.4.0 layouts) -
+    // see setStateInformation(), whose absent-parameter reset is generic
+    // and needs no per-version branching.
+    state.setProperty ("stateVersion", 3, nullptr);
 
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);

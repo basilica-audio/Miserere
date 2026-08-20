@@ -73,6 +73,22 @@ namespace msrr
             reset();
         }
 
+        // Kinetics update WITHOUT a state reset (issue #20's colour tuples):
+        // the charge states are continuous quantities - changing the rate
+        // constants only alters their derivatives, so swapping kinetics
+        // mid-stream never steps the cell resistance (the click-free colour
+        // swap relies on this). The states are re-clamped to the new
+        // parameter set's floors/ceilings; note darkCharge() depends on muN,
+        // and Rcell is clamped to the unchanged [Rlight, Rdark] either way,
+        // so a floor adjustment cannot move the divider away from its dark
+        // (unity-normalised) gain.
+        void updateParamsPreservingState (const OptoCellParams& newParams) noexcept
+        {
+            params = newParams;
+            qn = std::clamp (qn, darkCharge(), params.qMax);
+            qp = std::clamp (qp, 0.0, params.qMax);
+        }
+
         const OptoCellParams& getParams() const noexcept { return params; }
 
         // Dark equilibrium: the electron floor that realises Rdark with no

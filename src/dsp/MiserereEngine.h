@@ -103,6 +103,7 @@ public:
     void setDeessPreThresholdDb (float db) noexcept { deesserPre.setThresholdDb (db); }
 
     void setDirectFetEnabled (bool enabled) noexcept { directFetEnabled = enabled; }
+    void setDirectFetCharacter (FetCompressor::Character c) noexcept { directFet.setCharacter (c); }
     void setDirectFetThresholdDb (float db) noexcept { directFet.setThresholdDb (db); }
     void setDirectFetAttackMs (float ms) noexcept { directFet.setAttackMs (ms); }
     void setDirectFetReleaseMs (float ms) noexcept { directFet.setReleaseMs (ms); }
@@ -145,6 +146,7 @@ public:
 
     void setSandPeakReductionProportion (float amount01) noexcept { opto.setPeakReductionProportion (amount01); }
     void setSandLimitEnabled (bool enabled) noexcept { opto.setLimitEnabled (enabled); }
+    void setSandColour (OptoLeveler::Colour c) noexcept { opto.setColour (c); }
     void setSandEmphasisProportion (float amount01) noexcept { opto.setEmphasisProportion (amount01); }
     void setSandResidualEnabled (bool enabled) noexcept
     {

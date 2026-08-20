@@ -62,10 +62,55 @@
 // Stereo detection defaults to UNLINKED; setLinked(true) shares ONE
 // sidechain (cell + emphasis + feedback tap = max-abs of both channels)
 // across the pair, matching the hardware stereo-link behaviour.
+//
+// Colour switch (issue #20, `sand_colour`): a per-slot voicing tuple over
+// the carrier kinetics and the post-attenuator colour stage - generic era
+// descriptors only:
+//
+//   - **Classic** (default): the T4B calibration exactly as shipped in
+//     v0.5.0 (all scales 1.0, colour drive 1.15) - bit-identical to the
+//     previous release, so the golden-static-curve and release-target tests
+//     continue to hold unchanged.
+//   - **Quick**: later solid-state-era optical voicing - faster carrier
+//     recombination (nuN x6) with the electron mobility raised by sqrt(6)
+//     so the settled GR depth stays in the same class (qn_ss ~ sqrt(g/nuN),
+//     so muN*qn_ss is invariant under {nuN*k, muN*sqrt(k)}), and a reduced
+//     trap fraction (etaP x0.25, much less release memory). Colour stage
+//     nearly clean (drive 1.02).
+//   - **Deep**: earlier-era voicing - slower recombination (nuN x0.4,
+//     muN x sqrt(0.4)), tripled trap fraction (longer memory/tail), thicker
+//     colour stage (drive 1.45).
+//
+// Kinetics swap without a cell reset (OptoCell::updateParamsPreservingState;
+// the charge states are continuous, so the swap cannot step the gain);
+// only the colour-stage drive needs an explicit 50 ms smoothing ramp
+// (block-rate skip, like the peak-reduction drive) because it IS a gain
+// term. Every colour clamps Rcell to the same [Rlight, Rdark], so unity at
+// idle holds for all three.
 class OptoLeveler
 {
 public:
+    enum class Colour
+    {
+        classic,
+        quick,
+        deep
+    };
+
+    // The per-colour voicing tuple (exposed for tests).
+    struct ColourTuple
+    {
+        double nuNScale;          // electron recombination-rate scale
+        double muNScale;          // electron mobility scale (GR-depth compensation)
+        double etaPScale;         // trap-fraction scale (release memory)
+        float colourDriveLinear;  // post-attenuator colour-stage drive
+    };
+
+    static ColourTuple colourTupleFor (Colour c) noexcept;
+
     OptoLeveler() = default;
+
+    void setColour (Colour newColour) noexcept;
 
     void prepare (const juce::dsp::ProcessSpec& spec);
     void reset();
@@ -114,7 +159,7 @@ private:
     static constexpr float emphasisMaxCutDb = 10.0f;
     static constexpr float emphasisShelfQ = 0.5f;
 
-    static constexpr float postAttenuatorDriveLinear = 1.15f; // gentle fixed tube/transformer coloration (~1.2 dB)
+    static constexpr float postAttenuatorDriveLinear = 1.15f; // Classic colour's tube/transformer coloration (~1.2 dB); Quick/Deep scale it via ColourTuple
 
     static constexpr double driveSmoothingTimeSeconds = 0.05;
 
@@ -131,13 +176,14 @@ private:
     juce::dsp::IIR::Coefficients<float>::Ptr emphasisCoefficients { msrr::makeIdentityBiquad() };
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> driveSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> colourDriveSmoothed;
 
     float lastAmount01 = 0.4f;
     bool limitEnabled = false;
     float emphasisAmount = 1.0f;
     bool linked = false;
+    Colour colour = Colour::classic;
 
-    float postAttenuatorCompensation = 1.0f;
     double darkGain = 1.0;
 
     // Written once per processed block on the audio thread, read by the

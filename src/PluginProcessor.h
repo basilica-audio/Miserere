@@ -114,6 +114,7 @@ private:
     std::atomic<float>* directDeessPreFreq = nullptr;
     std::atomic<float>* directDeessPreThreshold = nullptr;
     std::atomic<float>* directFetEnabled = nullptr;
+    std::atomic<float>* directFetColour = nullptr;
     std::atomic<float>* directFetThreshold = nullptr;
     std::atomic<float>* directFetAttack = nullptr;
     std::atomic<float>* directFetRelease = nullptr;
@@ -148,6 +149,7 @@ private:
     std::atomic<float>* sandPreHfShelfAtten = nullptr;
     std::atomic<float>* sandPeakRed = nullptr;
     std::atomic<float>* sandLimit = nullptr;
+    std::atomic<float>* sandColour = nullptr;
     std::atomic<float>* sandEmphasis = nullptr;
     std::atomic<float>* sandResidual = nullptr;
     std::atomic<float>* sandPostLfFreq = nullptr;

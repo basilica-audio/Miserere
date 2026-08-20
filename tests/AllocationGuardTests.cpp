@@ -207,3 +207,63 @@ TEST_CASE ("v0.5.0 paths allocate nothing: flutter, age noise, feedback engines,
 
     CHECK (AllocationGuard::allocationCount() == 0);
 }
+
+//==============================================================================
+// Issue #20 - the per-slot dynamics colours: swapping a colour mid-stream
+// re-targets voicing tuples (FetCrush's 10 ms crossfade, FetCompressor's
+// smoothed knee/harmonic ramps, OptoLeveler's state-preserving kinetics
+// update + smoothed colour drive). None of that may touch the heap - the
+// engine setters are the exact calls updateEngineParameters() makes from
+// processBlock() when the host automates a colour choice.
+TEST_CASE ("Colour swaps allocate nothing mid-stream (crush style, FET character, sand colour)",
+           "[robustness][realtime][allocation][colour]")
+{
+    MiserereEngine engine;
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = 48000.0;
+    spec.maximumBlockSize = 512;
+    spec.numChannels = 2;
+    engine.prepare (spec);
+
+    engine.setBusLevelDb (0, 0.0f);
+    engine.setBusLevelDb (1, 0.0f);
+    engine.setCrushInputDriveDb (18.0f);
+    engine.setSandPeakReductionProportion (0.6f);
+    engine.setDirectFetEnabled (true);
+    engine.setDirectFetThresholdDb (-30.0f);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+
+    for (int warmup = 0; warmup < 4; ++warmup)
+    {
+        TestHelpers::fillWithSine (buffer, 48000.0, 440.0, 0.5f, warmup * 512);
+        juce::dsp::AudioBlock<float> block (buffer);
+        engine.process (block);
+    }
+
+    static constexpr FetCrush::Style styles[] = { FetCrush::Style::vintage, FetCrush::Style::gentle,
+                                                  FetCrush::Style::allButtons };
+    static constexpr FetCompressor::Character characters[] = { FetCompressor::Character::vca,
+                                                               FetCompressor::Character::tubeMu,
+                                                               FetCompressor::Character::fet };
+    static constexpr OptoLeveler::Colour colours[] = { OptoLeveler::Colour::quick, OptoLeveler::Colour::deep,
+                                                       OptoLeveler::Colour::classic };
+
+    AllocationGuard::reset();
+
+    for (int block = 0; block < 24; ++block)
+    {
+        // A colour change every few blocks, mid-crossfade included.
+        engine.setCrushStyle (styles[(block / 3) % 3]);
+        engine.setDirectFetCharacter (characters[(block / 3) % 3]);
+        engine.setSandColour (colours[(block / 3) % 3]);
+
+        TestHelpers::fillWithSine (buffer, 48000.0, 440.0, 0.5f, block * 512);
+        juce::dsp::AudioBlock<float> audioBlock (buffer);
+        engine.process (audioBlock);
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+
+    CHECK (AllocationGuard::allocationCount() == 0);
+}

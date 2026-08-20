@@ -97,7 +97,21 @@ namespace
 namespace msrr
 {
     const juce::StringArray crushRatioChoices { "4:1", "8:1", "12:1", "20:1", "ALL" };
-    const juce::StringArray crushStyleChoices { "All-Buttons", "Gentle" };
+
+    // "Vintage" is APPENDED (issue #20) so stored indices 0/1 keep their
+    // meaning in existing sessions/presets. Pre-1.0 caveat, documented in
+    // the PR: appending rescales the choice's NORMALISED axis, so
+    // host-recorded automation curves for crush_style written before v0.6.0
+    // land on different indices (state files store the raw index and are
+    // unaffected).
+    const juce::StringArray crushStyleChoices { "All-Buttons", "Gentle", "Vintage" };
+
+    // Issue #20 per-slot dynamics colours - generic hardware descriptors
+    // only (design principle: no brand names; "Tube Mu" is the generic
+    // variable-gain tube-family term, deliberately not the trademarked
+    // spelling).
+    const juce::StringArray directFetColourChoices { "FET", "VCA", "Tube Mu" };
+    const juce::StringArray sandColourChoices { "Classic", "Quick", "Deep" };
 
     const juce::StringArray eqHpfFreqChoices { "50 Hz", "80 Hz", "160 Hz", "300 Hz" };
     const std::array<float, 4> eqHpfFreqHz { 50.0f, 80.0f, 160.0f, 300.0f };
@@ -170,6 +184,13 @@ namespace msrr
 
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::directFetEnabled, 1 }, "Direct FET Enabled", false));
+
+        // v0.6.0 newcomers take versionHint 3 (the release generation that
+        // introduced them) - see the hint rule at slap_wobble below and
+        // ParameterTests.cpp's getVersionHint() assertions. Default index 0
+        // is the pre-#20 voicing, so older sessions load sound-identical.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::directFetColour, 3 }, "Direct FET Character", directFetColourChoices, 0));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::directFetThreshold, 1 },
@@ -321,6 +342,10 @@ namespace msrr
 
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::sandLimit, 1 }, "Sand Limit", false));
+
+        // versionHint 3 (v0.6.0 newcomer - see direct_fet_colour above).
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::sandColour, 3 }, "Sand Colour", sandColourChoices, 0));
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::sandEmphasis, 1 },

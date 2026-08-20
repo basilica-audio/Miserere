@@ -57,13 +57,14 @@ TEST_CASE ("Every automatable parameter has exactly one attached control", "[gui
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider&) { ++sliders; });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton&) { ++toggles; });
 
-    // The APVTS carries 43 float + 11 choice + 17 bool parameters = 71
-    // (ParameterIds.h). One knob per float/choice parameter, one toggle per
-    // bool parameter - no parameter may be left off the M3 surface, and no
-    // control may exist without a parameter.
-    CHECK ((int) processor.getParameters().size() == 71);
+    // The APVTS carries 43 float + 13 choice + 17 bool parameters = 73
+    // (ParameterIds.h; the two #20 colour choices joined in v0.6.0). One
+    // knob per float/choice parameter, one toggle per bool parameter - no
+    // parameter may be left off the M3 surface, and no control may exist
+    // without a parameter.
+    CHECK ((int) processor.getParameters().size() == 73);
     CHECK (sliders + toggles == (int) processor.getParameters().size());
-    CHECK (sliders == 54);
+    CHECK (sliders == 56);
     CHECK (toggles == 17);
 }
 
@@ -168,9 +169,9 @@ TEST_CASE ("No two interactive controls or meters overlap", "[gui][layout]")
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { collect (t); });
     visitDescendants<basilica::gui::NeedleMeter> (editor, [&] (basilica::gui::NeedleMeter& m) { collect (m); });
 
-    // 54 knobs + 17 toggles + 3 meters - the pairwise scan below must not
+    // 56 knobs + 17 toggles + 3 meters - the pairwise scan below must not
     // pass vacuously on an empty collection.
-    REQUIRE (entries.size() == 74);
+    REQUIRE (entries.size() == 76);
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
@@ -241,6 +242,6 @@ TEST_CASE ("Every knob's visible label text matches its accessible title (label-
         }
     });
 
-    // Every one of the 54 knobs carries an attached, matching label.
-    CHECK (labelledKnobs == 54);
+    // Every one of the 56 knobs carries an attached, matching label.
+    CHECK (labelledKnobs == 56);
 }

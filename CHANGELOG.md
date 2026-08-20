@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — swappable classic-style compressor colours per dynamics slot (#20)
+
+Every dynamics slot now carries a voicing switch, implemented as engine tuples the way
+`FetCrush::Style` always worked — no polymorphic module swapping, so the parameter surfaces,
+the zero-latency/phase discipline and the real-time guarantees are untouched. Generic
+hardware descriptors only, per the binding design principles. Every switch defaults to the
+pre-existing voicing (index 0), so v0.5.0 sessions load sound-identical, and every swap is
+click-free mid-stream (10 ms tuple crossfade on CRUSH, 50 ms smoothed knee/colour ramps on
+the Direct FET, a state-preserving carrier-kinetics update plus smoothed colour drive on the
+opto).
+
+- **Direct FET `direct_fet_colour`** — Character: **FET** (default, the exact previous
+  hard-knee voicing, bit-identical), **VCA** (6 dB soft knee, snappier attack, clean —
+  bit-transparent below the knee, null-tested) and **Tube Mu** (12 dB knee, slower attack,
+  longer release, GR-gated second-harmonic warmth; ≥1 % H2 under deep gain reduction,
+  DC-rejected).
+- **CRUSH `crush_style`** — a third style, **Vintage**, appended after All-Buttons/Gentle
+  (stored indices keep their meaning): the per-ratio all-buttons tuples in a hot
+  early-revision bias state — threshold −2 dB, loop ×1.12, residual-mismatch "hair" ×2.2,
+  under-damped charge path. Measurably earlier/deeper GR and >1.3× the harmonic colour at
+  the same settings, with the ratio row fully active.
+- **SANDWICH `sand_colour`** — Colour: **Classic** (default, the v0.5.0 T4B calibration,
+  bit-identical — the golden static curve still holds), **Quick** (solid-state-era optical:
+  ~6× faster carrier recombination with a √6 mobility compensation so the GR depth stays in
+  the same class, a quarter of the trap memory, near-clean output stage) and **Deep**
+  (earlier-era: slower recovery, tripled trap memory, thicker tube/transformer stage).
+- State schema stamped `stateVersion` 3; the two new choices take AU version hint 3
+  (v0.6.0 generation) so existing automation lanes cannot remap. Documented pre-1.0 caveat:
+  appending CRUSH's third style rescales that parameter's normalised axis, so
+  host-recorded `crush_style` automation from before v0.6.0 lands on different indices
+  (saved sessions/presets store raw indices and are unaffected).
+- New editor knobs (detented PointerKnobs like every choice): Direct Path "Character",
+  Sandwich "Colour"; layout/accessibility contracts extended to 73 parameters / 56 knobs.
+
 ### Added — M3 custom vector editor and accessible parameter surface
 
 - **Vector editor** (#25) — the functional slider/knob editor is replaced by a fully
