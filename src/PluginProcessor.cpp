@@ -109,6 +109,7 @@ namespace
             { BinaryData::aggressiveRockVocal_json, BinaryData::aggressiveRockVocal_jsonSize },
             { BinaryData::tapeSlap75_json, BinaryData::tapeSlap75_jsonSize },
             { BinaryData::wornSlap_json, BinaryData::wornSlap_jsonSize },
+            { BinaryData::bvMode_json, BinaryData::bvMode_jsonSize },
         };
     }
 }

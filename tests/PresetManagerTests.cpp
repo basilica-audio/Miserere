@@ -15,7 +15,7 @@
 // items, called out in the test names/comments). Ported from nave's pilot
 // implementation (tests/PresetManagerTests.cpp there - the M2 replication
 // recipe, docs/preset-system-notes.md), adapted to Miserere's own
-// parameters and its 10 factory presets (docs/presets.md).
+// parameters and its 13 factory presets (docs/presets.md).
 namespace
 {
     using basilica::presets::FactoryPresetAsset;
@@ -27,6 +27,13 @@ namespace
     // so this test file can construct its own, fully isolated PresetManager
     // instances (see makeIsolatedConfig() below) without depending on
     // production wiring internals.
+    //
+    // "Independent copy" is not a licence to DRIFT: from v0.5.0 until issue
+    // #21 this list silently lagged two presets behind (tapeSlap75/wornSlap
+    // were embedded and shipped but never appeared here), so the
+    // factory-preset count assertion below was asserting ten while the
+    // plugin shipped twelve. Any preset added to CMakeLists.txt's
+    // juce_add_binary_data() SOURCES must be added to BOTH lists.
     std::vector<FactoryPresetAsset> makeTestFactoryPresetAssets()
     {
         return {
@@ -40,6 +47,9 @@ namespace
             { BinaryData::roughMixGlue_json, BinaryData::roughMixGlue_jsonSize },
             { BinaryData::whisperThicken_json, BinaryData::whisperThicken_jsonSize },
             { BinaryData::aggressiveRockVocal_json, BinaryData::aggressiveRockVocal_jsonSize },
+            { BinaryData::tapeSlap75_json, BinaryData::tapeSlap75_jsonSize },
+            { BinaryData::wornSlap_json, BinaryData::wornSlap_jsonSize },
+            { BinaryData::bvMode_json, BinaryData::bvMode_jsonSize },
         };
     }
 
@@ -262,7 +272,7 @@ TEST_CASE ("PresetManager: every factory preset parses and loads without error",
     const auto all = manager.getAllPresets();
     const auto factoryCount = std::count_if (all.begin(), all.end(), [] (auto& e) { return e.isFactory; });
 
-    REQUIRE (factoryCount == 10); // docs/presets.md's ten factory presets
+    REQUIRE (factoryCount == 13); // docs/presets.md's thirteen factory presets
 
     for (auto& entry : all)
     {
@@ -316,6 +326,70 @@ TEST_CASE ("PresetManager: factory preset content is plausible (Default is Init 
         CHECK (getParam (processor, ParamIDs::slapTime) >= 50.0f);
         CHECK (getParam (processor, ParamIDs::slapTime) <= 160.0f);
     }
+}
+
+TEST_CASE ("PresetManager: BV Mode is a factory preset that pushes every return harder than the lead defaults", "[presets][bv]")
+{
+    // Issue #21. The preset's INTENT is the thing worth regression-guarding:
+    // a background/stacked-vocal starting point sits harder on every return
+    // than the lead-vocal template does, with the two thickening busses
+    // (SPREAD/SLAP) brought forward most, and leaves the direct path a wire
+    // apart from the HPF that clears room for the lead.
+    MiserereAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    ScopedTestDirectory scratch;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    const auto all = manager.getAllPresets();
+    const auto bv = std::find_if (all.begin(), all.end(), [] (auto& e) { return e.name == "BV Mode"; });
+
+    REQUIRE (bv != all.end());
+    CHECK (bv->isFactory);
+    CHECK (bv->category == "Vocals");
+
+    // The lead-vocal reference: the plugin's own documented default fader
+    // recipe (-9/-12/-18/-15 dB).
+    REQUIRE (manager.loadPreset ("Default"));
+
+    const auto leadCrush = getParam (processor, ParamIDs::crushLevel);
+    const auto leadSand = getParam (processor, ParamIDs::sandLevel);
+    const auto leadSpread = getParam (processor, ParamIDs::spreadLevel);
+    const auto leadSlap = getParam (processor, ParamIDs::slapLevel);
+
+    REQUIRE (manager.loadPreset ("BV Mode"));
+
+    CHECK (getParam (processor, ParamIDs::crushLevel) > leadCrush);
+    CHECK (getParam (processor, ParamIDs::sandLevel) > leadSand);
+    CHECK (getParam (processor, ParamIDs::spreadLevel) > leadSpread);
+    CHECK (getParam (processor, ParamIDs::slapLevel) > leadSlap);
+
+    // Driven harder, not just faded up.
+    CHECK (getParam (processor, ParamIDs::crushInput) > 20.0f);
+    CHECK (getParam (processor, ParamIDs::sandPeakRed) > 60.0f);
+
+    // Thickening busses at their widest: this is the BV move.
+    CHECK (getParam (processor, ParamIDs::spreadWidth) == Catch::Approx (100.0f).margin (0.1f));
+    CHECK (getParam (processor, ParamIDs::spreadDetune) > 9.0f);
+    CHECK (processor.apvts.getParameter (ParamIDs::slapStereo)->getValue() >= 0.5f);
+
+    // Direct path: the HPF is the ONE section engaged (BVs need the lows
+    // cleared for the lead); everything else on the channel stays a wire.
+    CHECK (processor.apvts.getParameter (ParamIDs::directEqHpfEnabled)->getValue() >= 0.5f);
+
+    for (const auto* id : { ParamIDs::directDeessPreEnabled, ParamIDs::directFetEnabled,
+                             ParamIDs::directDeessPostEnabled })
+    {
+        INFO ("direct-path section id = " << id);
+        CHECK (processor.apvts.getParameter (id)->getValue() < 0.5f);
+    }
+
+    CHECK (getParam (processor, ParamIDs::directSatDrive) == Catch::Approx (0.0f).margin (1.0e-3));
+    CHECK (getParam (processor, ParamIDs::directEqDrive) == Catch::Approx (0.0f).margin (1.0e-3));
+
+    // And it does not quietly engage the v0.7.0 output limiter (absent from
+    // every factory preset - absent parameters reset to their defaults).
+    CHECK (processor.apvts.getParameter (ParamIDs::limiterEnabled)->getValue() < 0.5f);
 }
 
 //==============================================================================

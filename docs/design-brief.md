@@ -148,11 +148,12 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
   research-derived, not measured against hardware units; say so.
 - Manual notes the technique's era (2010–2023 template workflow, as documented publicly)
   without implying endorsement by any person or brand.
-- Out of scope for v2 (explicitly): short plate reverb module, BV mode preset, external
-  sidechain. These are M2+/M3 candidates, tracked as issues. (Swappable compressor colours
+- Out of scope for v2 (explicitly): short plate reverb module, external sidechain. These are
+  M2+/M3 candidates, tracked as issues. (Swappable compressor colours
   beyond the two crush styles were on this list until v0.6.0, when issue #20 shipped them as
   per-slot engine voicing tuples: `direct_fet_colour`, `crush_style`'s appended third choice,
-  `sand_colour`. The output limiter left the list in v0.7.0, issue #24.)
+  `sand_colour`. The output limiter left the list in v0.7.0, issue #24, and the BV mode preset
+  with issue #21 - a factory preset, no new DSP.)
 - The v0.7.0 output limiter enforces a **sample-peak** ceiling and says so everywhere: #24
   mandates zero latency and no lookahead, and true-peak detection needs an oversampled
   reconstruction whose filters are delays — honouring them is lookahead under another name.
