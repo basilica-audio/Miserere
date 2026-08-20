@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] — 2026-08-20
+
+Three additions that each defend the same invariant. The chain gains an optional external
+key for its three keyable detectors, a background/stacked-vocal starting point, and a final
+safety limiter — and every one of them is disabled, unengaged or off by default, so the
+default bus layout and the default sound stay byte-identical to v0.6.0. Still zero reported
+latency, and no lookahead anywhere. Catch2 suite: 212 → 233 cases.
 
 ### Added — external sidechain input (#23)
 
