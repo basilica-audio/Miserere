@@ -127,6 +127,9 @@ MiserereAudioProcessor::MiserereAudioProcessor()
     bypassParameter = apvts.getParameter (ParamIDs::bypass);
     linkFlag = apvts.getRawParameterValue (ParamIDs::link);
     parallelTrimDb = apvts.getRawParameterValue (ParamIDs::parallelTrim);
+    limiterEnabled = apvts.getRawParameterValue (ParamIDs::limiterEnabled);
+    limiterCeilingDb = apvts.getRawParameterValue (ParamIDs::limiterCeiling);
+    limiterReleaseMs = apvts.getRawParameterValue (ParamIDs::limiterRelease);
 
     directDeessPreEnabled = apvts.getRawParameterValue (ParamIDs::directDeessPreEnabled);
     directDeessPreFreq = apvts.getRawParameterValue (ParamIDs::directDeessPreFreq);
@@ -205,6 +208,7 @@ MiserereAudioProcessor::MiserereAudioProcessor()
 
     jassert (inTrimDb != nullptr && outTrimDb != nullptr && bypassFlag != nullptr && bypassParameter != nullptr);
     jassert (linkFlag != nullptr && parallelTrimDb != nullptr);
+    jassert (limiterEnabled != nullptr && limiterCeilingDb != nullptr && limiterReleaseMs != nullptr);
     jassert (directDeessPreEnabled != nullptr && directDeessPreFreq != nullptr && directDeessPreThreshold != nullptr);
     jassert (directFetEnabled != nullptr && directFetColour != nullptr && directFetThreshold != nullptr && directFetAttack != nullptr);
     jassert (directFetRelease != nullptr && directFetMakeup != nullptr);
@@ -347,6 +351,10 @@ void MiserereAudioProcessor::updateEngineParameters() noexcept
     engine.setOutTrimDb (load (outTrimDb));
     engine.setLinked (loadBool (linkFlag));
     engine.setParallelTrimDb (load (parallelTrimDb));
+
+    engine.setLimiterEnabled (loadBool (limiterEnabled));
+    engine.setLimiterCeilingDb (load (limiterCeilingDb));
+    engine.setLimiterReleaseMs (load (limiterReleaseMs));
 
     engine.setDeessPreEnabled (loadBool (directDeessPreEnabled));
     engine.setDeessPreFreqHz (load (directDeessPreFreq));
@@ -534,13 +542,16 @@ void MiserereAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
 
-    // State schema stamp: version 3 = the v0.6.0 layout that introduced
+    // State schema stamp: version 4 = the v0.7.0 layout that introduced the
+    // output limiter (limiter_enabled/limiter_ceiling/limiter_release,
+    // issue #24); version 3 was the v0.6.0 layout that introduced
     // direct_fet_colour/sand_colour and appended crush_style's third choice
     // (issue #20); version 2 introduced slap_wobble/slap_age (v0.5.0). A
     // missing property on load means version 1 (v0.2.0-v0.4.0 layouts) -
     // see setStateInformation(), whose absent-parameter reset is generic
-    // and needs no per-version branching.
-    state.setProperty ("stateVersion", 3, nullptr);
+    // and needs no per-version branching (a v0.6.0 session simply carries
+    // no limiter values and therefore loads with the limiter OFF).
+    state.setProperty ("stateVersion", 4, nullptr);
 
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);

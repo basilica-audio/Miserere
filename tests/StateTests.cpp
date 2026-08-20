@@ -255,7 +255,7 @@ TEST_CASE ("State migration: a v0.4.0 session loaded into a DIRTIED instance res
     CHECK (realValue (ParamIDs::crushStyle) == Catch::Approx (1.0f).margin (1.0e-4f));
 }
 
-TEST_CASE ("State schema: re-save stamps stateVersion = 3; round-trip is lossless incl. wobble/age", "[state][migration][version]")
+TEST_CASE ("State schema: re-save stamps stateVersion = 4; round-trip is lossless incl. wobble/age and the limiter", "[state][migration][version]")
 {
     MiserereAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
@@ -269,19 +269,27 @@ TEST_CASE ("State schema: re-save stamps stateVersion = 3; round-trip is lossles
 
     setReal (ParamIDs::slapWobble, 35.0f);
     setReal (ParamIDs::slapAge, 55.0f);
+    setReal (ParamIDs::limiterCeiling, -2.5f);
+    setReal (ParamIDs::limiterRelease, 120.0f);
+
+    auto* limiterEnabled = processor.apvts.getParameter (ParamIDs::limiterEnabled);
+    REQUIRE (limiterEnabled != nullptr);
+    limiterEnabled->setValueNotifyingHost (1.0f);
 
     juce::MemoryBlock saved;
     processor.getStateInformation (saved);
 
-    // The serialised tree carries stateVersion = 3 (v0.6.0 colour layout,
-    // issue #20).
+    // The serialised tree carries stateVersion = 4 (v0.7.0 output-limiter
+    // layout, issue #24).
     const auto xml = juce::AudioProcessor::getXmlFromBinary (saved.getData(), static_cast<int> (saved.getSize()));
     REQUIRE (xml != nullptr);
-    CHECK (xml->getIntAttribute ("stateVersion", -1) == 3);
+    CHECK (xml->getIntAttribute ("stateVersion", -1) == 4);
 
     // Round-trip through a dirtied state is lossless for the new params.
     setReal (ParamIDs::slapWobble, 0.0f);
     setReal (ParamIDs::slapAge, 0.0f);
+    setReal (ParamIDs::limiterCeiling, -12.0f);
+    limiterEnabled->setValueNotifyingHost (0.0f);
     processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
 
     const auto realValue = [&] (const char* id)
@@ -292,6 +300,9 @@ TEST_CASE ("State schema: re-save stamps stateVersion = 3; round-trip is lossles
 
     CHECK (realValue (ParamIDs::slapWobble) == Catch::Approx (35.0f).margin (0.1f));
     CHECK (realValue (ParamIDs::slapAge) == Catch::Approx (55.0f).margin (0.1f));
+    CHECK (realValue (ParamIDs::limiterCeiling) == Catch::Approx (-2.5f).margin (0.01f));
+    CHECK (realValue (ParamIDs::limiterRelease) == Catch::Approx (120.0f).margin (0.5f));
+    CHECK (limiterEnabled->getValue() >= 0.5f);
 }
 
 TEST_CASE ("State: a v1 session (unknown old busA_/busB_/busC_/busD_ IDs) loads without crashing", "[state][v1-import]")

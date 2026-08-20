@@ -37,7 +37,8 @@ namespace
     constexpr int slotGap = 6; // trimmed off the right of every slot
     constexpr int rowHeight = labelHeight + knobSize + textBoxHeight;
 
-    // Right-hand meter bay on the three gain-reducing panels.
+    // Right-hand meter bay on the four gain-reducing panels (Global's is
+    // the output limiter's, issue #24).
     constexpr int meterBayWidth = 150;
     constexpr int meterWidth = 134;
     constexpr int meterHeight = 96;
@@ -81,6 +82,17 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (global, ParamIDs::parallelTrim, "Parallel Trim");
     addToggle (global, ParamIDs::link, "Link");
     addToggle (global, ParamIDs::bypass, "Bypass");
+
+    // Output limiter (issue #24) - appended to the Global row because it is
+    // the last stage in the signal path, keeping the focus order in
+    // signal-flow order. The three controls plus the meter bay take the
+    // Global panel to ~768 px, still well under the Direct panel's 1102 px,
+    // so the editor's overall width is unchanged.
+    addToggle (global, ParamIDs::limiterEnabled, "Limiter");
+    addKnob (global, ParamIDs::limiterCeiling, "Ceiling");
+    addKnob (global, ParamIDs::limiterRelease, "Release");
+
+    addMeter (global, "Limiter gain reduction meter", "LIMIT");
 
     // --- Direct path (serial), in signal-flow order -----------------------
     auto& direct = addPanel ("Direct Path");
@@ -308,6 +320,9 @@ void MiserereAudioProcessorEditor::timerCallback()
 {
     // Positive dB of gain reduction, straight from the engine's per-block
     // metering (relaxed atomic reads - see the DSP headers).
+    if (globalPanel != nullptr && globalPanel->meter != nullptr)
+        globalPanel->meter->setTargetDb (audioProcessor.getLimiterGainReductionDb());
+
     if (directPanel != nullptr && directPanel->meter != nullptr)
         directPanel->meter->setTargetDb (audioProcessor.getDirectFetGainReductionDb());
 

@@ -72,6 +72,7 @@ public:
     float getDirectFetGainReductionDb() const noexcept { return engine.getDirectFetGainReductionDb(); }
     float getCrushGainReductionDb() const noexcept { return engine.getCrushGainReductionDb(); }
     float getSandGainReductionDb() const noexcept { return engine.getSandGainReductionDb(); }
+    float getLimiterGainReductionDb() const noexcept { return engine.getLimiterGainReductionDb(); }
 
 private:
     //==============================================================================
@@ -109,6 +110,9 @@ private:
     std::atomic<float>* bypassFlag = nullptr;
     std::atomic<float>* linkFlag = nullptr;
     std::atomic<float>* parallelTrimDb = nullptr;
+    std::atomic<float>* limiterEnabled = nullptr;
+    std::atomic<float>* limiterCeilingDb = nullptr;
+    std::atomic<float>* limiterReleaseMs = nullptr;
 
     std::atomic<float>* directDeessPreEnabled = nullptr;
     std::atomic<float>* directDeessPreFreq = nullptr;

@@ -434,6 +434,30 @@ namespace msrr
 
         addLevelMuteAudition (layout, ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition, "Slap", -15.0f);
 
+        //======================================================================
+        // Output limiter (issue #24) - a GLOBAL section deliberately added
+        // at the END of the layout rather than next to the other globals
+        // above: layout order is host parameter-index order, so inserting
+        // in the middle would shift every later parameter's index in
+        // existing sessions. Appending is the same discipline the version
+        // hints enforce for AU (v0.7.0 newcomers -> hint 4).
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::limiterEnabled, 4 }, "Limiter", false));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::limiterCeiling, 4 },
+            "Limiter Ceiling",
+            juce::NormalisableRange<float> (-12.0f, 0.0f, 0.01f),
+            -0.3f, // a sample-peak ceiling, NOT true-peak (see OutputLimiter.h)
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::limiterRelease, 4 },
+            "Limiter Release",
+            makeLogRange (5.0f, 500.0f),
+            60.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("ms")));
+
         return layout;
     }
 }

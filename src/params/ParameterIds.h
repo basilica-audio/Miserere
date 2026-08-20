@@ -39,6 +39,14 @@ namespace ParamIDs
     // -24...+6 dB.
     inline constexpr auto parallelTrim = "parallel_trim";
 
+    // Output limiter (issue #24, v0.7.0): the last stage, after the Out
+    // Trim. OFF by default so the bit-transparent default wire is
+    // untouched. A SAMPLE-PEAK ceiling - zero latency and no lookahead are
+    // mandated, which rules out true-peak detection (see OutputLimiter.h).
+    inline constexpr auto limiterEnabled = "limiter_enabled";
+    inline constexpr auto limiterCeiling = "limiter_ceiling"; // -12...0 dBFS, default -0.3
+    inline constexpr auto limiterRelease = "limiter_release"; // 5...500 ms, default 60
+
     //==========================================================================
     // Direct path (serial, every section optional, ALL OFF by default):
     // De-Esser (pre) -> FET Comp light -> Console EQ -> Sat -> De-Esser (post)

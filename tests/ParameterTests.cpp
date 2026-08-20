@@ -42,6 +42,8 @@ TEST_CASE ("Every frozen parameter ID exists in the layout", "[parameters]")
 
         ParamIDs::slapTime, ParamIDs::slapStereo, ParamIDs::slapTone,
         ParamIDs::slapLevel, ParamIDs::slapMute, ParamIDs::slapAudition,
+
+        ParamIDs::limiterEnabled, ParamIDs::limiterCeiling, ParamIDs::limiterRelease,
     };
 
     for (const auto* id : allIds)
@@ -186,6 +188,13 @@ TEST_CASE ("Version hints: v0.5.0 newcomers are hint 2, pre-existing parameters 
         CHECK (hintOf (id) == 3);
     }
 
+    // v0.7.0 newcomers (issue #24, the output limiter) take hint 4.
+    for (const auto* id : { ParamIDs::limiterEnabled, ParamIDs::limiterCeiling, ParamIDs::limiterRelease })
+    {
+        INFO ("v0.7.0 parameter id = " << id);
+        CHECK (hintOf (id) == 4);
+    }
+
     // Spot-check across every section, including the SLAP bus the newcomers
     // joined - these must not have been dragged forward.
     for (const auto* id : { ParamIDs::inTrim, ParamIDs::outTrim, ParamIDs::bypass, ParamIDs::link,
@@ -235,4 +244,31 @@ TEST_CASE ("v0.6.0 colour parameters default to the pre-#20 voicing (index 0)", 
         INFO ("parameter id = " << id);
         CHECK (param->getIndex() == 0);
     }
+}
+
+TEST_CASE ("v0.7.0 output-limiter parameters: ranges and an OFF default (issue #24)", "[parameters][versionhint][limiter]")
+{
+    MiserereAudioProcessor processor;
+
+    // Binding compatibility promise: the limiter defaults OFF, so the
+    // bit-transparent default wire is untouched and a v0.6.0 session (which
+    // carries no limiter values at all) renders unchanged.
+    CHECK (processor.apvts.getParameter (ParamIDs::limiterEnabled)->getValue() < 0.5f);
+
+    const auto rangedParam = [&] (const char* id)
+    {
+        auto* param = dynamic_cast<juce::RangedAudioParameter*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+        return param;
+    };
+
+    auto* ceiling = rangedParam (ParamIDs::limiterCeiling);
+    CHECK (ceiling->getNormalisableRange().start == Catch::Approx (-12.0f));
+    CHECK (ceiling->getNormalisableRange().end == Catch::Approx (0.0f));
+    CHECK (ceiling->convertFrom0to1 (ceiling->getDefaultValue()) == Catch::Approx (-0.3f).margin (1.0e-3));
+
+    auto* release = rangedParam (ParamIDs::limiterRelease);
+    CHECK (release->getNormalisableRange().start == Catch::Approx (5.0f));
+    CHECK (release->getNormalisableRange().end == Catch::Approx (500.0f));
+    CHECK (release->convertFrom0to1 (release->getDefaultValue()) == Catch::Approx (60.0f).margin (1.0e-2));
 }

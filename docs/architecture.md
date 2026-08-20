@@ -16,7 +16,7 @@ flowchart LR
     SAND_FADER --> PARALLEL_TRIM
     SPREAD_FADER --> PARALLEL_TRIM
     SLAP_FADER --> PARALLEL_TRIM
-    SUM --> TRIM_OUT[Out Trim] --> OUT[Output]
+    SUM --> TRIM_OUT[Out Trim] --> LIMITER["Output Limiter (off by default)"] --> OUT[Output]
 ```
 
 The whole path is owned by `MiserereEngine` (`src/dsp/MiserereEngine.{h,cpp}`), independent
@@ -47,6 +47,13 @@ must survive underneath everything else that gets added.
   [ADR 0003](adr/0003-parallel-bus-topology.md).
 - **Reported latency is always 0** (`tests/LatencyTests.cpp`): nothing on any bus is a
   compensation delay - Spread/Slap's delays are the musical effect itself.
+- **The output limiter (issue #24) is causal and lookahead-free too**, which is precisely
+  why it guarantees a SAMPLE-peak ceiling rather than a true-peak one: true-peak detection
+  needs an oversampled reconstruction, whose filters are delays, and honouring their verdict
+  means holding the audio back by that delay - lookahead under another name.
+  `tests/OutputLimiterTests.cpp` measures the inter-sample overshoot that therefore remains
+  (8x windowed-sinc reconstruction) and regression-freezes the figure instead of pretending
+  it is absent.
 
 `tests/NullAndAlignmentTests.cpp` proves the strongest version of this at neutral EQ
 settings: Direct + Crush + Sandwich sum an impulse to a single aligned sample with nothing
@@ -56,7 +63,7 @@ else above −100 dBFS.
 
 | Directory | Responsibility |
 |---|---|
-| `src/dsp` | One class per module. `DeEsser`, `TapeSat` (+ shared `TapeSaturator` curve) are unchanged from v1, instantiated twice/once respectively on the Direct path. `FetCompressor` is the Direct path's simple threshold-based "FET Comp light" (insert voicing only - no drive/ALL-mode character). `FetCrush` is the new, separate input-drive/per-ratio-table/dual-rate-release/ALL-mode-plateau module for bus ① Crush. `ConsoleEq` is the Direct path's 1073-class grid, with the HPF folded in as a 3-pole (1st + 2nd order) cascade (the standalone v1 `Hpf` class is retired). `OptoLeveler` and `PassiveEq` (shared, two instances) implement bus ② Sandwich. `SpreadPitch` (new) and `SlapDelay` (rewritten for v2's single-repeat, feedback-fixed-at-0 design) implement busses ③/④. `MiserereEngine` wires everything into the v2 topology. `RealtimeCoefficients.h` holds the shared allocation-free IIR coefficient-update helpers, unchanged. |
+| `src/dsp` | One class per module. `DeEsser`, `TapeSat` (+ shared `TapeSaturator` curve) are unchanged from v1, instantiated twice/once respectively on the Direct path. `FetCompressor` is the Direct path's simple threshold-based "FET Comp light" (insert voicing only - no drive/ALL-mode character). `FetCrush` is the new, separate input-drive/per-ratio-table/dual-rate-release/ALL-mode-plateau module for bus ① Crush. `ConsoleEq` is the Direct path's 1073-class grid, with the HPF folded in as a 3-pole (1st + 2nd order) cascade (the standalone v1 `Hpf` class is retired). `OptoLeveler` and `PassiveEq` (shared, two instances) implement bus ② Sandwich. `SpreadPitch` (new) and `SlapDelay` (rewritten for v2's single-repeat, feedback-fixed-at-0 design) implement busses ③/④. `OutputLimiter` (v0.7.0, issue #24) is the final safety stage after the Out Trim - zero-latency, no lookahead, sample-peak ceiling, OFF by default and a bit-exact bypass while off. `MiserereEngine` wires everything into the v2 topology. `RealtimeCoefficients.h` holds the shared allocation-free IIR coefficient-update helpers, unchanged. |
 | `src/params` | `ParameterIds.h` (frozen-as-of-v0.2.0 ID contract - the v1 IDs are gone, a deliberate breaking change pre-1.0) and `ParameterLayout.cpp` (APVTS layout: ranges, defaults, choice lists). Choice-index→value tables live here too, so the layout strings and the DSP mapping can never drift apart. |
 | `src/PluginProcessor.*` | Host plumbing: APVTS wiring, `prepareToPlay`/`processBlock`/`reset`, oversized-block chunking, latency reporting (always 0), state save/load (tolerant of a v1 session's now-unknown IDs), Audition-exclusivity parameter listener. No DSP of its own. |
 | `src/PluginEditor.*` | The same data-driven functional editor as v1 (unchanged architecture), rebuilt against the v2 parameter set. Custom GUI is M3. |

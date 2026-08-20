@@ -28,6 +28,7 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
         ├─→ ③ SPREAD   : dual micro-pitch (≈30/50 ms, ±cents, L/R) → return fader
         └─→ ④ SLAP     : ≈110 ms dark single-repeat delay          → return fader
    Σ (direct + returns) → [PARALLEL macro trim scales returns ①–④] → [Out Trim]
+                        → [Output Limiter — off by default, v0.7.0/#24]
 ```
 
 - Busses ①/② are minimum-phase, zero added latency, sample-aligned with the direct path
@@ -148,10 +149,17 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
 - Manual notes the technique's era (2010–2023 template workflow, as documented publicly)
   without implying endorsement by any person or brand.
 - Out of scope for v2 (explicitly): short plate reverb module, BV mode preset, external
-  sidechain, output limiter. These are M2+/M3 candidates, tracked as issues. (Swappable
-  compressor colours beyond the two crush styles were on this list until v0.6.0, when
-  issue #20 shipped them as per-slot engine voicing tuples: `direct_fet_colour`,
-  `crush_style`'s appended third choice, `sand_colour`.)
+  sidechain. These are M2+/M3 candidates, tracked as issues. (Swappable compressor colours
+  beyond the two crush styles were on this list until v0.6.0, when issue #20 shipped them as
+  per-slot engine voicing tuples: `direct_fet_colour`, `crush_style`'s appended third choice,
+  `sand_colour`. The output limiter left the list in v0.7.0, issue #24.)
+- The v0.7.0 output limiter enforces a **sample-peak** ceiling and says so everywhere: #24
+  mandates zero latency and no lookahead, and true-peak detection needs an oversampled
+  reconstruction whose filters are delays — honouring them is lookahead under another name.
+  The inter-sample overshoot that necessarily remains is measured (8× windowed-sinc) and
+  regression-frozen in `tests/OutputLimiterTests.cpp`, and quoted in the manual: 3.01 dB for
+  the analytic worst-case sine, 0.71 dB for an arbitrary-phase 11 kHz tone, 0.06 dB for a
+  1 kHz tone. No "true peak" claim appears in any user-facing string.
 
 ## Versioning
 

@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — output limiter (#24)
+
+A final safety stage after the Out Trim, **off by default** and a bit-exact bypass while off,
+so the plugin's default-wire invariant is untouched.
+
+- `limiter_enabled` (off), `limiter_ceiling` (−12…0 dB, default −0.3 dB) and
+  `limiter_release` (5…500 ms, default 60 ms), plus three controls appended to the Global
+  panel and a fourth needle meter in that panel's meter bay. State schema stamped
+  `stateVersion` 4; the three newcomers take AU version hint 4, so existing automation lanes
+  cannot remap.
+- **Sample-peak ceiling, explicitly not true-peak.** Issue #24 mandates zero latency and no
+  lookahead; true-peak detection needs an oversampled reconstruction whose filters are
+  delays, and honouring their verdict means holding the audio back by that delay — lookahead
+  under another name. What is guaranteed is that no output *sample* exceeds the ceiling. The
+  inter-sample overshoot that necessarily remains is **measured** with an 8× windowed-sinc
+  reconstruction and regression-frozen in `tests/OutputLimiterTests.cpp`: **3.01 dB** for the
+  analytic worst-case sine (a Nyquist/4 tone phased so every sample straddles a crest),
+  **0.71 dB** for an arbitrary-phase 11 kHz tone, **0.06 dB** for a 1 kHz tone. The manual
+  quotes these figures; no user-facing string claims a true-peak ceiling.
+- Gain computer: infinite ratio with a 3 dB soft knee in dB
+  (`yDb = min(xDb − u²/(2·knee), ceiling)`, `u = clamp(xDb − (ceiling − knee/2), 0, knee)`),
+  whose maximum over the knee is exactly the ceiling. Instantaneous attack (the only way to
+  hold a ceiling without lookahead) and a one-pole release that approaches the static gain
+  strictly from below, so recovery can never breach the ceiling. Once the signal is clear of
+  the knee the gain snaps to exactly 1.0f and the stage is bit-transparent again — the loop
+  state is kept in double precision because a float one-pole stalls ~1.6e-4 short of unity
+  and would leave a permanent, silent ~0.01 dB attenuation after every peak.
+- Detection is **permanently L/R-linked** and deliberately not governed by the global `link`
+  control: `link` chooses dual-mono vs. linked detection for CRUSH/SANDWICH, where dual mono
+  is part of the sound, but unlinked *limiting* applies different gains to L and R on the
+  summed output and pans the image on every peak.
+- 11 new Catch2 test cases (223 total, up from 212): bit-exact bypass, the static curve's
+  unity/ceiling contract, "no output sample exceeds the ceiling" across five ceilings × three
+  release settings, instantaneous attack on a silence-to-+18 dBFS step, monotone
+  never-overshooting release that lands on exact unity, settled bit-exact wire, image-preserving
+  linked detection, the frozen inter-sample overshoot measurement, a robustness battery
+  (zero-length blocks, denormals, NaN/Inf, sample-rate change) and a plugin-level ordering
+  test proving the limiter sits after the Out Trim.
+
 ## [0.6.0] — 2026-08-20
 
 The M3 GUI release. The functional slider editor becomes a fully vector-drawn, fully
