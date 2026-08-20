@@ -250,9 +250,11 @@ the end of your master chain, where its latency costs nothing.
 
 A preset bar sits at the top of the editor: `[<] [PresetName*] [>] [Save] [Save As...]
 [Delete] [Import...] [Export...]`. Clicking the preset name opens a Factory/User menu; a
-trailing `*` means the current preset has unsaved changes. Twelve factory presets ship in the
+trailing `*` means the current preset has unsaved changes. Thirteen factory presets ship in the
 box (see `presets.md` for what each one is for) — including **Tape Slap 7.5** and **Worn
-Slap**, added in v0.5.0 to exercise Wobble and Age; user presets save to
+Slap**, added in v0.5.0 to exercise Wobble and Age, and **BV Mode**, a
+background/stacked-vocal starting point with every return pushed harder than the lead
+template; user presets save to
 `~/Library/Audio/Presets/Yves Vogl/Miserere/` on macOS (`%APPDATA%/Yves Vogl/Miserere/Presets/`
 on Windows). The preset menu's "Set current as default" makes any preset — factory or user —
 load automatically on every fresh instance; "Import..." accepts both single preset files and
@@ -316,10 +318,10 @@ oversampling is for, and it costs latency.
 - The output limiter (v0.7.0) enforces a **sample-peak** ceiling, not a true-peak one, and
   cannot enforce a true-peak one without breaking the zero-latency guarantee — see the
   measured inter-sample overshoot table in the Output limiter section above.
-- Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module, a "BV mode"
-  preset, external sidechain. (Swappable compressor colours per dynamics slot shipped in
+- Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module and external
+  sidechain. (Swappable compressor colours per dynamics slot shipped in
   v0.6.0 — the Direct FET's Character, CRUSH's third Style and SANDWICH's Colour switches
-  above; the output limiter shipped in v0.7.0.)
+  above; the output limiter and the BV Mode preset shipped in v0.7.0.)
 - Dynamics detection is unlinked (independent L/R) by default on Crush and Sandwich; Link
   makes both channels track a shared detector.
 - The voicing throughout this plugin is **research-derived, not measured against hardware

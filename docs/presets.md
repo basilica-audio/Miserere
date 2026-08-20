@@ -1,6 +1,6 @@
 # Factory presets
 
-Ten factory presets ship with Miserere v0.3.0, embedded via BinaryData from
+Thirteen factory presets ship with Miserere, embedded via BinaryData from
 `presets/factory/*.json` (see nave's `docs/preset-system-notes.md` for the
 shared build wiring this repo copied). All are designed against
 `docs/design-brief.md`'s v2 topology and `docs/research-notes.md`'s sourced
@@ -25,3 +25,6 @@ every preset except **Direct Channel Only** and **Aggressive Rock Vocal**.
 | **Rough Mix Glue** | Vocals | A light, balanced touch of all four returns at once for quick rough-mix vocal glue - every bus present but restrained (lower drive/peak-reduction/width than Classic Parallel Blend), direct path off. |
 | **Whisper Thicken** | Vocals | For thin/quiet/breathy vocals: Crush and Sandwich kept very light (control, not colour), Spread and Slap brought forward to add body and width, with a light pre de-esser for breath-driven sibilance. |
 | **Aggressive Rock Vocal** | Vocals | The full chain leaned in hard: a fast, driven direct FET compressor, an aggressive console EQ scoop/lift with drive and tape grit, de-essing on both sides of the direct chain, Crush pushed hot, Sandwich present, a short dark Spread/Slap pair - an in-your-face genre vocal showcasing direct-path and parallel-bus processing together. |
+| **Tape Slap 7.5** | Vocals | Added in v0.5.0 to exercise the SLAP bus's tape transport: a wider, brighter-than-usual slap running at moderate Wobble so the repeat's pitch wanders the way a 7.5 ips machine does, with the other three returns restrained. |
+| **Worn Slap** | Vocals | Added in v0.5.0 as Tape Slap 7.5's tired sibling: heavy Age (hiss with the signal-riding asperity component plus extra spacing loss) over a darker, slower slap — the "this tape has been round the block" flavour. |
+| **BV Mode** | Vocals | Added for issue #21: background/stacked vocals rather than a lead. Every return is pushed harder than the lead template (CRUSH at −6 dB off a hot 26 dB input, SANDWICH at −8 dB with 70% peak reduction) and the two thickening busses come forward hardest — SPREAD at −9 dB with maximum width and 11 cents of detune, a stereo SLAP at −12 dB. The one direct-path section engaged anywhere is the 160 Hz HPF: BVs need the low end cleared for the lead they sit behind, and the rest of the channel stays a wire. Voiced from the template's own documented logic (parallel returns are driven far harder than any insert; SPREAD/SLAP exist "for thickening", `docs/research-notes.md`) rather than from a BV-specific source — there is no primary-source quote about background vocals in the research notes, and none is claimed. |

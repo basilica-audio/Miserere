@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — "BV Mode" factory preset (#21)
+
+A background/stacked-vocal starting point rather than a lead one: every return sits harder
+than the lead template (CRUSH at −6 dB off a hot 26 dB input, SANDWICH at −8 dB with 70 %
+peak reduction) and the two thickening busses come forward most — SPREAD at −9 dB with
+maximum width and 11 cents of detune, a stereo SLAP at −12 dB with a touch of tape wear. The
+only direct-path section it engages anywhere is the 160 Hz HPF, to clear the low end for the
+lead the stack sits behind; the rest of the channel stays a wire.
+
+Voiced from the template's own documented logic (parallel returns are driven far harder than
+any insert; SPREAD/SLAP exist "for thickening") rather than from a BV-specific source — there
+is no primary-source quote about background vocals in `docs/research-notes.md`, and none is
+claimed.
+
+### Fixed — factory-preset registration drift (#21)
+
+`CMakeLists.txt` has embedded twelve factory presets since v0.5.0, but
+`tests/PresetManagerTests.cpp`'s independent copy of the asset list still carried ten
+(`tapeSlap75`/`wornSlap` were shipping untested) and asserted `factoryCount == 10`, so the
+count assertion was passing against a stale list rather than against what the plugin ships.
+Both lists now carry all thirteen presets, the assertion reads 13, and `docs/presets.md`
+documents the three previously undocumented entries (Tape Slap 7.5, Worn Slap, BV Mode).
+
 ### Added — output limiter (#24)
 
 A final safety stage after the Out Trim, **off by default** and a bit-exact bypass while off,

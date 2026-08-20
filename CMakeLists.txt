@@ -78,6 +78,7 @@ juce_add_binary_data(MiserereBinaryData SOURCES
     presets/factory/aggressiveRockVocal.json
     presets/factory/tapeSlap75.json
     presets/factory/wornSlap.json
+    presets/factory/bvMode.json
     resources/i18n/de.txt
     # Suite typography (M3 vector editor, issue #25): EB Garamond, OFL
     # licensed (resources/fonts/OFL-EBGaramond.txt) - consumed by
