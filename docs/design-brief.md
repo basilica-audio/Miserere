@@ -148,12 +148,18 @@ in → [In Trim] → DIRECT PATH (serial; every section optional, ALL OFF by def
   research-derived, not measured against hardware units; say so.
 - Manual notes the technique's era (2010–2023 template workflow, as documented publicly)
   without implying endorsement by any person or brand.
-- Out of scope for v2 (explicitly): short plate reverb module, external sidechain. These are
-  M2+/M3 candidates, tracked as issues. (Swappable compressor colours
+- Out of scope for v2 (explicitly): short plate reverb module. Still an M2+/M3 candidate,
+  tracked as an issue. (Swappable compressor colours
   beyond the two crush styles were on this list until v0.6.0, when issue #20 shipped them as
   per-slot engine voicing tuples: `direct_fet_colour`, `crush_style`'s appended third choice,
-  `sand_colour`. The output limiter left the list in v0.7.0, issue #24, and the BV mode preset
-  with issue #21 - a factory preset, no new DSP.)
+  `sand_colour`. The output limiter left the list in v0.7.0 with issue #24, the BV mode preset
+  with issue #21 - a factory preset, no new DSP - and the external sidechain with issue #23.)
+- The v0.7.0 external sidechain (#23) is documented as what it is: CRUSH and SANDWICH are
+  FEEDBACK topologies, so an external key REPLACES their loop drive and converts them into
+  feed-forward keyed compressors with a measurably different static curve (~3 dB vs ~21 dB of
+  CRUSH gain reduction on the same signal at the same settings, regression-tested). The manual
+  states this rather than presenting the key as "the same sound from a different detector
+  source". The Direct FET, already feed-forward, is a genuine pure detector-source swap.
 - The v0.7.0 output limiter enforces a **sample-peak** ceiling and says so everywhere: #24
   mandates zero latency and no lookahead, and true-peak detection needs an oversampled
   reconstruction whose filters are delays — honouring them is lookahead under another name.

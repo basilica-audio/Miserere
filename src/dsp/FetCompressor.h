@@ -56,6 +56,17 @@
 // Detection is per-channel independent (not stereo-linked) - matching the
 // module's simple insert-voicing role; only the CRUSH bus exposes the
 // unlinked/linked detector choice (see design-brief.md's Link switch).
+//
+// EXTERNAL SIDECHAIN (issue #23, `direct_fet_key_ext`): process() accepts an
+// optional key block whose samples replace the input as the envelope
+// detector's source. This module is FEED-FORWARD already - the envelope has
+// always been derived from the pre-gain input - so keying it externally is a
+// pure detector-source swap: the topology, the static curve and the
+// ballistics are unchanged, only what the detector looks at changes. (The
+// CRUSH and SANDWICH busses are a different matter - see their headers.) A
+// key with fewer channels than the audio is reused across the remaining
+// channels (mono key into a stereo path); a null key block means internal
+// detection.
 class FetCompressor
 {
 public:
@@ -91,8 +102,10 @@ public:
     void setMakeupDb (float newMakeupDb) noexcept { makeupGainLinear = juce::Decibels::decibelsToGain (newMakeupDb); }
 
     // Processes `block` in place. A zero-sample block is a safe no-op. No
-    // allocation occurs here.
-    void process (juce::dsp::AudioBlock<float>& block) noexcept;
+    // allocation occurs here. `externalKey` (optional, may be null) replaces
+    // the input as the envelope detector's source - see the class comment.
+    void process (juce::dsp::AudioBlock<float>& block,
+                  const juce::dsp::AudioBlock<const float>* externalKey = nullptr) noexcept;
 
     // Current gain reduction in dB (positive value = that much reduction),
     // the peak across channels in the last processed block - exposed for

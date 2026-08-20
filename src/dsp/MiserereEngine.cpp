@@ -120,7 +120,8 @@ void MiserereEngine::setBusAudition (int busIndex, bool auditioned) noexcept
         busAuditioned[static_cast<size_t> (busIndex)] = auditioned;
 }
 
-void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
+void MiserereEngine::process (juce::dsp::AudioBlock<float>& block,
+                              const juce::dsp::AudioBlock<const float>* externalKey) noexcept
 {
     const auto requestedSamples = block.getNumSamples();
 
@@ -138,6 +139,22 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
 
     auto workingBlock = block.getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
 
+    // External sidechain (issue #23): trim the host's key to this block's
+    // length. Anything unusable - absent bus, disabled bus, no channels, a
+    // short key - degrades silently to internal detection rather than
+    // half-keying the block.
+    juce::dsp::AudioBlock<const float> keyBlock;
+    const auto haveKey = externalKey != nullptr
+                      && externalKey->getNumChannels() > 0
+                      && externalKey->getNumSamples() >= numSamples;
+
+    if (haveKey)
+        keyBlock = externalKey->getSubBlock (0, numSamples);
+
+    const auto* directFetKey = haveKey && directFetKeyExternal ? &keyBlock : nullptr;
+    const auto* crushKey = haveKey && crushKeyExternal ? &keyBlock : nullptr;
+    const auto* sandKey = haveKey && sandKeyExternal ? &keyBlock : nullptr;
+
     juce::dsp::ProcessContextReplacing<float> inputContext (workingBlock);
     inTrimGain.process (inputContext);
 
@@ -150,7 +167,7 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
     deesserPre.process (directBlock);
 
     if (directFetEnabled)
-        directFet.process (directBlock);
+        directFet.process (directBlock, directFetKey);
 
     consoleEq.process (directBlock);
     tapeSat.process (directBlock);
@@ -171,11 +188,11 @@ void MiserereEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
         busBlock.copyFrom (directBlock);
 
     // (1) CRUSH.
-    crush.process (busBlocks[0]);
+    crush.process (busBlocks[0], crushKey);
 
     // (2) SANDWICH: Passive EQ -> Opto Leveler -> Passive EQ.
     sandwichPreEq.process (busBlocks[1]);
-    opto.process (busBlocks[1]);
+    opto.process (busBlocks[1], sandKey);
     sandwichPostEq.process (busBlocks[1]);
 
     // (3) SPREAD.

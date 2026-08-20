@@ -196,11 +196,11 @@ TEST_CASE ("Every interactive control is keyboard-focusable", "[gui][a11y]")
         CHECK (toggle.getTitle().isNotEmpty());
     });
 
-    // 45 float + 13 choice parameters = 58 knobs; 18 bool parameters = 18
+    // 45 float + 13 choice parameters = 58 knobs; 21 bool parameters = 21
     // toggles (see ParameterIds.h). A zero-match walk must not pass
     // vacuously.
     CHECK (slidersSeen == 58);
-    CHECK (togglesSeen == 18);
+    CHECK (togglesSeen == 21);
 
     // The preset bar's buttons are stock juce::TextButtons - focusable by
     // default, and none may have opted out. Save/Delete start DISABLED
@@ -429,7 +429,7 @@ TEST_CASE ("Each bus is an accessibility focus container that does not trap Tab"
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider& s) { isInsideExactlyOnePanel (s); });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { isInsideExactlyOnePanel (t); });
 
-    CHECK (controlsChecked == 76);
+    CHECK (controlsChecked == 79);
 }
 
 TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per bus", "[gui][a11y]")

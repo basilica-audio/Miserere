@@ -55,6 +55,9 @@ namespace ParamIDs
     inline constexpr auto directDeessPreThreshold = "direct_deessPre_threshold";
 
     inline constexpr auto directFetEnabled = "direct_fet_enabled";
+    // External-sidechain key for this detector (issue #23, v0.7.0). The
+    // Direct FET is feed-forward, so this is a pure detector-source swap.
+    inline constexpr auto directFetKeyExt = "direct_fet_key_ext";
     inline constexpr auto directFetColour = "direct_fet_colour"; // choice: FET / VCA / Tube Mu (issue #20, v0.6.0)
     inline constexpr auto directFetThreshold = "direct_fet_threshold";
     inline constexpr auto directFetAttack = "direct_fet_attack";
@@ -84,6 +87,11 @@ namespace ParamIDs
     inline constexpr auto crushAttack = "crush_attack";   // 1-7, inverted taper (7 = fastest)
     inline constexpr auto crushRelease = "crush_release"; // 1-7, inverted taper (7 = fastest)
     inline constexpr auto crushOutput = "crush_output";   // makeup trim
+    // External-sidechain key (issue #23, v0.7.0). CRUSH is a FEEDBACK
+    // compressor: the key REPLACES the loop drive, which converts it to a
+    // feed-forward keyed compressor with a measurably different curve - see
+    // FetCrush.h. Documented as such, never as "the same sound".
+    inline constexpr auto crushKeyExt = "crush_key_ext";
 
     inline constexpr auto crushLevel = "crush_level";
     inline constexpr auto crushMute = "crush_mute";
@@ -105,6 +113,10 @@ namespace ParamIDs
     inline constexpr auto sandColour = "sand_colour";     // choice: Classic / Quick / Deep (issue #20, v0.6.0)
     inline constexpr auto sandEmphasis = "sand_emphasis"; // 0-100%, detector-only HF-selective compression
     inline constexpr auto sandResidual = "sand_residual"; // defeatable never-flat vintage residual, default ON
+    // External-sidechain key (issue #23, v0.7.0). SANDWICH's opto leveler is
+    // also a FEEDBACK topology - same caveat as crush_key_ext, see
+    // OptoLeveler.h.
+    inline constexpr auto sandKeyExt = "sand_key_ext";
 
     inline constexpr auto sandPostLfFreq = "sand_post_lfFreq";
     inline constexpr auto sandPostLfBoost = "sand_post_lfBoost";

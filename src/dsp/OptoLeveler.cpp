@@ -100,13 +100,21 @@ void OptoLeveler::setPeakReductionProportion (float newAmount01) noexcept
     driveSmoothed.setTargetValue (lastAmount01);
 }
 
-void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
+void OptoLeveler::process (juce::dsp::AudioBlock<float>& block,
+                           const juce::dsp::AudioBlock<const float>* externalKey) noexcept
 {
     const auto numChannels = block.getNumChannels();
     const auto numSamples = block.getNumSamples();
 
     if (numSamples == 0 || numChannels == 0)
         return;
+
+    // External sidechain (issue #23): the key REPLACES the feedback panel
+    // drive, turning this into a feed-forward keyed leveler - see the class
+    // comment. Fewer key channels than audio channels is legal (the last
+    // key channel is reused).
+    const auto keyChannels = externalKey != nullptr ? externalKey->getNumChannels() : 0;
+    const auto useKey = keyChannels > 0 && externalKey->getNumSamples() >= numSamples;
 
     // Peak Reduction -> sidechain gain 0..+40 dB (see class comment).
     const auto sidechainGainDb = juce::jlimit (0.0f, 1.0f, driveSmoothed.skip (static_cast<int> (numSamples))) * maxSidechainGainDb;
@@ -165,7 +173,25 @@ void OptoLeveler::process (juce::dsp::AudioBlock<float>& block) noexcept
         {
             float det = 0.0f;
 
-            if (linked)
+            if (useKey)
+            {
+                if (linked)
+                {
+                    for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
+                    {
+                        const auto keySample = externalKey->getChannelPointer (juce::jmin (channel, keyChannels - 1))[sample];
+
+                        if (std::isfinite (keySample) && std::abs (keySample) > std::abs (det))
+                            det = keySample;
+                    }
+                }
+                else
+                {
+                    const auto keySample = externalKey->getChannelPointer (juce::jmin (sc, keyChannels - 1))[sample];
+                    det = std::isfinite (keySample) ? keySample : 0.0f;
+                }
+            }
+            else if (linked)
             {
                 for (size_t channel = 0; channel < numChannelsToProcess; ++channel)
                     if (std::abs (feedbackSample[channel]) > std::abs (det))

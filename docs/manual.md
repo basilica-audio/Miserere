@@ -204,6 +204,42 @@ It affects only the SLAP return, never the direct path. At 0 nothing is generate
 - **Parallel** is a macro trim (−24…+6 dB) that offsets all four return faders together — the
   "VCA ride back" gesture for quickly backing off the whole parallel layer.
 
+## External sidechain (v0.7.0)
+
+Miserere exposes an optional **Sidechain** input bus, **disabled by default** — enable it in
+your host's plugin routing, then switch individual detectors over to it with the **Ext Key**
+lamp in the Direct Path, Crush and Sandwich panels. There is no master switch: each detector
+decides for itself, so you can key CRUSH from a snare while SANDWICH keeps listening to the
+vocal. If the bus is absent or disabled, or the host sends no key, every switch falls back to
+internal detection silently. A mono key feeding a stereo instance keys both channels.
+
+**What keying actually does to CRUSH and SANDWICH — read this before assuming it is "the same
+sound, different detector source".** Both of those busses are *feedback* designs, and that is
+not an implementation detail, it is where their character comes from:
+
+- **CRUSH** drives its rectifier from its own output, one sample back. The soft knee, the
+  ratio creeping up as a note is held, the program-dependent release — all of it emerges
+  from that loop.
+- **SANDWICH**'s opto leveler drives its EL panel from its own compressed output, for the
+  same reason: there is no static-curve lookup in the code at all, the curve *is* the loop.
+
+An external key does not add a detector input to those loops. It **replaces the loop drive**,
+which converts both modules into **feed-forward keyed compressors** for as long as Ext Key is
+engaged. The photocell physics, the ballistics and the colour stages are unchanged, but the
+static curve is not: a feedback detector sees the already-reduced signal and backs itself off,
+while a feed-forward detector sees the full-scale key and does not. Measured on the same
+signal at the same settings (a −22 dBFS tone, 0 dB Input), CRUSH produces about **3 dB** of
+gain reduction with internal detection and about **21 dB** when keyed with a copy of its own
+input. That is a legitimate and useful mode — it is simply a different compressor, and expecting
+your internal-detection settings to carry over unchanged will surprise you.
+
+**The Direct FET is the exception**: it has always been feed-forward (its envelope comes from
+the pre-gain input), so keying it really is a pure detector-source swap — same topology, same
+curve, different source.
+
+The key is read only. It never reaches the audio path, it is not part of the sum, and it does
+not affect the zero-latency guarantee.
+
 ## Output limiter (v0.7.0)
 
 The last stage in the plugin, after Out Trim, with its own needle meter on the Global panel.
@@ -318,10 +354,15 @@ oversampling is for, and it costs latency.
 - The output limiter (v0.7.0) enforces a **sample-peak** ceiling, not a true-peak one, and
   cannot enforce a true-peak one without breaking the zero-latency guarantee — see the
   measured inter-sample overshoot table in the Output limiter section above.
-- Out of scope for v2, tracked as M2+/M3 issues: a short plate reverb module and external
-  sidechain. (Swappable compressor colours per dynamics slot shipped in
+- Keying CRUSH or SANDWICH from the external sidechain converts them from feedback to
+  feed-forward compressors, with a measurably different static curve — see the External
+  sidechain section above. This is inherent to keying a feedback topology, not a limitation
+  that can be tuned away.
+- Out of scope for v2, tracked as an M2+/M3 issue: a short plate reverb module. (Swappable
+  compressor colours per dynamics slot shipped in
   v0.6.0 — the Direct FET's Character, CRUSH's third Style and SANDWICH's Colour switches
-  above; the output limiter and the BV Mode preset shipped in v0.7.0.)
+  above; the output limiter, the BV Mode preset and the external sidechain shipped in
+  v0.7.0.)
 - Dynamics detection is unlinked (independent L/R) by default on Crush and Sandwich; Link
   makes both channels track a shared detector.
 - The voicing throughout this plugin is **research-derived, not measured against hardware

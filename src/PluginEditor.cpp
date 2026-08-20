@@ -101,6 +101,8 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (direct, ParamIDs::directDeessPreFreq, "Pre Freq");
     addKnob (direct, ParamIDs::directDeessPreThreshold, "Pre Thresh");
     addToggle (direct, ParamIDs::directFetEnabled, "FET");
+    // Issue #23: the key switch sits with the detector it re-sources.
+    addToggle (direct, ParamIDs::directFetKeyExt, "Ext Key");
     addKnob (direct, ParamIDs::directFetColour, "Character");
     addKnob (direct, ParamIDs::directFetThreshold, "Threshold");
     addKnob (direct, ParamIDs::directFetAttack, "Attack");
@@ -132,6 +134,7 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (crush, ParamIDs::crushAttack, "Attack");
     addKnob (crush, ParamIDs::crushRelease, "Release");
     addKnob (crush, ParamIDs::crushOutput, "Output");
+    addToggle (crush, ParamIDs::crushKeyExt, "Ext Key");
     addKnob (crush, ParamIDs::crushLevel, "Level");
     addToggle (crush, ParamIDs::crushMute, "Mute");
     addToggle (crush, ParamIDs::crushAudition, "Audition");
@@ -156,6 +159,7 @@ MiserereAudioProcessorEditor::MiserereAudioProcessorEditor (MiserereAudioProcess
     addKnob (sandwich, ParamIDs::sandColour, "Colour");
     addKnob (sandwich, ParamIDs::sandEmphasis, "Emphasis");
     addToggle (sandwich, ParamIDs::sandResidual, "Residual");
+    addToggle (sandwich, ParamIDs::sandKeyExt, "Ext Key");
 
     addRow (sandwich);
     addKnob (sandwich, ParamIDs::sandPostLfFreq, "Post LF Freq");

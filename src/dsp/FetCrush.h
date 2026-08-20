@@ -80,6 +80,25 @@
 // Stereo detection defaults to UNLINKED (independent per-channel sidechains
 // - "dual mono is key", design brief); setLinked(true) shares one vC driven
 // by the max-abs of both channels' feedback samples.
+//
+// EXTERNAL SIDECHAIN (issue #23, `crush_key_ext`) - READ THIS BEFORE
+// ASSUMING IT IS "THE SAME SOUND WITH A DIFFERENT DETECTOR SOURCE":
+// this module is a FEEDBACK compressor. Its rectifier is driven by y[n-1],
+// the module's OWN ALREADY-COMPRESSED OUTPUT, and the soft knee, the ratio
+// creep and the program-dependent release all EMERGE from that loop. An
+// external key does not add a detector input to the loop - it REPLACES the
+// loop drive, converting the module into a FEED-FORWARD keyed compressor
+// for as long as the key is engaged. The static curve genuinely changes:
+// a feedback detector sees the reduced signal and therefore backs itself
+// off (the characteristic soft, self-limiting ratio), while a feed-forward
+// keyed detector sees the full-scale key and bites harder and deeper at the
+// same settings. That is a legitimate, useful mode - it is simply not the
+// same compressor, and the manual says so.
+//
+// The key is driven through the same `crush_input` drive as the audio, so
+// the Input control still governs how hard the detector bites; the key is
+// otherwise untouched (no filtering). A key with fewer channels than the
+// audio is reused across the remaining channels.
 class FetCrush
 {
 public:
@@ -129,8 +148,11 @@ public:
     void setLinked (bool shouldBeLinked) noexcept { linked = shouldBeLinked; }
 
     // Processes `block` in place. A zero-sample block is a safe no-op. No
-    // allocation occurs here.
-    void process (juce::dsp::AudioBlock<float>& block) noexcept;
+    // allocation occurs here. `externalKey` (optional, may be null) REPLACES
+    // the feedback loop drive - see the class comment for what that does to
+    // the topology.
+    void process (juce::dsp::AudioBlock<float>& block,
+                  const juce::dsp::AudioBlock<const float>* externalKey = nullptr) noexcept;
 
     // Current gain reduction in dB (positive = reduction), peak across
     // channels in the last processed block - exposed for metering/tests.

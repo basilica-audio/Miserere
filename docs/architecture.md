@@ -4,6 +4,9 @@
 
 ```mermaid
 flowchart LR
+    KEY["Sidechain (optional, off by default)"] -.->|external key| CRUSH
+    KEY -.->|external key| SAND_OPTO
+    KEY -.->|external key| DP_FET
     IN[Input] --> TRIM_IN[In Trim]
     TRIM_IN --> DP_DSP[De-Ess Pre] --> DP_FET[FET Comp light] --> DP_EQ[Console EQ] --> DP_SAT[Sat] --> DP_DSPOST[De-Ess Post]
     DP_DSPOST --> DIRECT_SUM((direct, unity))
@@ -65,7 +68,7 @@ else above −100 dBFS.
 |---|---|
 | `src/dsp` | One class per module. `DeEsser`, `TapeSat` (+ shared `TapeSaturator` curve) are unchanged from v1, instantiated twice/once respectively on the Direct path. `FetCompressor` is the Direct path's simple threshold-based "FET Comp light" (insert voicing only - no drive/ALL-mode character). `FetCrush` is the new, separate input-drive/per-ratio-table/dual-rate-release/ALL-mode-plateau module for bus ① Crush. `ConsoleEq` is the Direct path's 1073-class grid, with the HPF folded in as a 3-pole (1st + 2nd order) cascade (the standalone v1 `Hpf` class is retired). `OptoLeveler` and `PassiveEq` (shared, two instances) implement bus ② Sandwich. `SpreadPitch` (new) and `SlapDelay` (rewritten for v2's single-repeat, feedback-fixed-at-0 design) implement busses ③/④. `OutputLimiter` (v0.7.0, issue #24) is the final safety stage after the Out Trim - zero-latency, no lookahead, sample-peak ceiling, OFF by default and a bit-exact bypass while off. `MiserereEngine` wires everything into the v2 topology. `RealtimeCoefficients.h` holds the shared allocation-free IIR coefficient-update helpers, unchanged. |
 | `src/params` | `ParameterIds.h` (frozen-as-of-v0.2.0 ID contract - the v1 IDs are gone, a deliberate breaking change pre-1.0) and `ParameterLayout.cpp` (APVTS layout: ranges, defaults, choice lists). Choice-index→value tables live here too, so the layout strings and the DSP mapping can never drift apart. |
-| `src/PluginProcessor.*` | Host plumbing: APVTS wiring, `prepareToPlay`/`processBlock`/`reset`, oversized-block chunking, latency reporting (always 0), state save/load (tolerant of a v1 session's now-unknown IDs), Audition-exclusivity parameter listener. No DSP of its own. |
+| `src/PluginProcessor.*` | Host plumbing: APVTS wiring, `prepareToPlay`/`processBlock`/`reset`, oversized-block chunking, latency reporting (always 0), state save/load (tolerant of a v1 session's now-unknown IDs), Audition-exclusivity parameter listener, and the optional external-sidechain bus (issue #23 - disabled by default; the audio path is taken as the MAIN bus's view of the host buffer so the key channels are never processed as audio, and the key is chunked in lockstep with the audio). No DSP of its own. |
 | `src/PluginEditor.*` | The same data-driven functional editor as v1 (unchanged architecture), rebuilt against the v2 parameter set. Custom GUI is M3. |
 
 Dependency direction is one-way: `PluginEditor` → `params`, `PluginProcessor` → `params` +

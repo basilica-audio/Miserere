@@ -63,6 +63,25 @@
 // sidechain (cell + emphasis + feedback tap = max-abs of both channels)
 // across the pair, matching the hardware stereo-link behaviour.
 //
+// EXTERNAL SIDECHAIN (issue #23, `sand_key_ext`) - READ THIS BEFORE
+// ASSUMING IT IS "THE SAME SOUND WITH A DIFFERENT DETECTOR SOURCE":
+// like the CRUSH bus, this is a FEEDBACK topology. The EL panel is driven
+// by y[n-1] - the module's OWN ALREADY-COMPRESSED OUTPUT - and the soft
+// knee, the emergent ratio and the static curve all come out of that loop
+// (there is no static-curve lookup left in the code). An external key does
+// not add a detector input to the loop, it REPLACES the panel drive,
+// converting the leveler into a FEED-FORWARD keyed compressor while the key
+// is engaged: the panel sees the full-scale key rather than the reduced
+// output, so it turns on earlier and drives the cell harder at the same
+// Peak Reduction setting. The photocell physics, the two-stage release and
+// the memory effect are unchanged - the static curve is not. Legitimate and
+// useful, but not the same compressor, and the manual says so.
+//
+// The key passes through the same Peak Reduction sidechain gain and the same
+// R37 emphasis shelf as the internal drive does, so both controls keep their
+// meaning. A key with fewer channels than the audio is reused across the
+// remaining channels.
+//
 // Colour switch (issue #20, `sand_colour`): a per-slot voicing tuple over
 // the carrier kinetics and the post-attenuator colour stage - generic era
 // descriptors only:
@@ -131,8 +150,11 @@ public:
     void setLinked (bool shouldBeLinked) noexcept { linked = shouldBeLinked; }
 
     // Processes `block` in place. A zero-sample block is a safe no-op. No
-    // allocation occurs here.
-    void process (juce::dsp::AudioBlock<float>& block) noexcept;
+    // allocation occurs here. `externalKey` (optional, may be null) REPLACES
+    // the feedback panel drive - see the class comment for what that does to
+    // the topology.
+    void process (juce::dsp::AudioBlock<float>& block,
+                  const juce::dsp::AudioBlock<const float>* externalKey = nullptr) noexcept;
 
     // Current gain reduction in dB (positive = reduction), peak across
     // channels in the last processed block - exposed for metering/tests.
