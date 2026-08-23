@@ -90,8 +90,59 @@ private:
     // parameter state) and once per processBlock().
     void updateEngineParameters() noexcept;
 
+    // Issue #41: click-free, latency-compensated bypass. Blends `wet` (the
+    // chunk MiserereEngine::process() just produced, in place in the host's
+    // own buffer) towards `dry` (a delayed copy of the untouched input - see
+    // bypassDryDelay's docs below) using bypassWetMix, advancing it one
+    // SmoothedValue step per sample. `wet` is both an input and the
+    // destination.
+    void applyBypassCrossfade (const juce::dsp::AudioBlock<const float>& dry,
+                               juce::dsp::AudioBlock<float>& wet) noexcept;
+
     //==============================================================================
     MiserereEngine engine;
+
+    // Issue #41: bypass is a continuous crossfade between the engine's output
+    // and the time-aligned dry signal (bypassDryDelay below), driven by this
+    // SmoothedValue rather than a hard branch out of processBlock().
+    // A fixed TIME constant, not a fixed sample count - sample-rate
+    // independence matters here because a bypass toggle is a performance-time
+    // event a player reacts to, not an internal engine swap. See
+    // bypassCrossfadeDurationSeconds in the .cpp. 1 = fully wet, 0 = fully
+    // bypassed (dry).
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> bypassWetMix;
+
+    // Ceiling for the bypass dry-path delay, and the delay line's allocated
+    // capacity (allocated once in prepareToPlay(), never on the audio
+    // thread).
+    static constexpr int maxLatencyCompensationSamples = 4096;
+
+    // Issue #41: delays a copy of the untouched input by the plugin's own
+    // reported latency, so the bypassed ("dry") signal stays phase-aligned
+    // with the engine output it is blended against - amplitude-blending two
+    // signals that are not time-aligned would comb-filter rather than null,
+    // which is its own kind of audible discontinuity at the bypass boundary.
+    //
+    // Miserere reports ZERO latency at all times by design (busses (1)/(2)
+    // are minimum-phase and causal, busses (3)/(4)'s delays are the effects
+    // themselves rather than compensation - docs/adr/0003), so today this is
+    // armed to 0 samples and is a bit-exact passthrough. It is here anyway
+    // because the invariant this implements is "the dry path is delayed by
+    // exactly getLatencySamples()", not "by zero": the day any stage stops
+    // being zero-latency, the bypass path must not silently become a phase
+    // error. tests/BypassTests.cpp asserts the invariant in that form.
+    //
+    // Always kept running (see processBlock()), never only while bypass
+    // happens to be engaged, so its history is never stale when bypass
+    // toggles.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassDryDelay { maxLatencyCompensationSamples };
+
+    // Issue #41: holds the untouched input for the current chunk (captured
+    // before MiserereEngine::process() mutates its argument in place) and
+    // then, after bypassDryDelay.process() has run on it, the time-aligned
+    // dry signal applyBypassCrossfade() blends against the engine output.
+    // Sized in prepareToPlay(), never resized on the audio thread.
+    juce::AudioBuffer<float> bypassDryBuffer;
 
     // Oversized-block guard: hosts are expected never to exceed the block
     // size promised to prepareToPlay(), but if one does, processBlock()
