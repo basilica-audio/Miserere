@@ -155,6 +155,61 @@ TEST_CASE ("MiserereEngine::process() performs zero heap allocations once prepar
 }
 
 //==============================================================================
+// Issue #41 - the click-free, latency-compensated bypass. Bypass is now a
+// crossfade against a delayed dry copy (bypassWetMix/bypassDryDelay - see
+// PluginProcessor.h), which means an extra snapshot-delay-blend path runs in
+// processBlock() on EVERY block, not only while bypass happens to be engaged.
+// That is new code on the audio thread's hottest path and exactly the kind of
+// change that is an easy place to accidentally allocate (a fresh
+// juce::dsp::AudioBlock is free, but a re-sized juce::AudioBuffer is not, and
+// this touches both). Toggling mid-stream is measured as well as steady state,
+// since the toggle is what arms the SmoothedValue ramp.
+TEST_CASE ("Toggling bypass mid-stream performs zero heap allocations",
+           "[robustness][realtime][allocation][bypass]")
+{
+    MiserereAudioProcessor processor;
+    bringUpAllBusses (processor);
+    processor.prepareToPlay (48000.0, 512);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    for (int warmup = 0; warmup < 4; ++warmup)
+    {
+        TestHelpers::fillWithSine (buffer, 48000.0, 110.0, 0.5f, warmup * 512);
+        processor.processBlock (buffer, midi);
+    }
+
+    auto* bypassParameter = processor.apvts.getParameter (ParamIDs::bypass);
+    REQUIRE (bypassParameter != nullptr);
+
+    std::size_t allocations = 0;
+
+    {
+        // The parameter write happens BETWEEN blocks (it is a message-thread
+        // call in production and is allowed to allocate), so the counter is
+        // reset immediately before each processBlock() and only that call's
+        // own allocations are accumulated. This measures processBlock(), not
+        // a JUCE listener-list implementation detail.
+        AllocationGuard::Scope scope;
+
+        for (int block = 0; block < 40; ++block)
+        {
+            bypassParameter->setValueNotifyingHost (block % 2 == 0 ? 1.0f : 0.0f);
+            TestHelpers::fillWithSine (buffer, 48000.0, 110.0, 0.5f, block * 512);
+
+            AllocationGuard::reset();
+            processor.processBlock (buffer, midi);
+            allocations += AllocationGuard::allocationCount();
+        }
+    }
+
+    INFO (allocations << " allocations across 40 bypass toggles");
+    CHECK (TestHelpers::allSamplesFinite (buffer));
+    CHECK (allocations == 0);
+}
+
+//==============================================================================
 // Brief section 6.12 - the guard must also cover the v0.5.0 paths that only
 // come alive at non-neutral settings: the F5 flutter generator and age noise
 // layer, the F3/F4 feedback engines' per-sample ODE iteration, and the F2

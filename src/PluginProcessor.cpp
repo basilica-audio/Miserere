@@ -5,8 +5,18 @@
 
 #include <BinaryData.h>
 
+#include <cmath>
+
 namespace
 {
+    // Issue #41: fixed, sample-rate-independent crossfade time for the
+    // wet/dry bypass blend (see bypassWetMix's docs in PluginProcessor.h).
+    // 20 ms is long enough that the blend itself never reads as a click and
+    // short enough that engaging/disengaging bypass still feels
+    // instantaneous to a player - the same figure the sibling plugins use
+    // for their own transition ramps.
+    constexpr double bypassCrossfadeDurationSeconds = 0.02;
+
     // Maps an AudioParameterChoice's raw (float) index into a concrete
     // value table, clamped defensively.
     template <size_t N>
@@ -469,6 +479,28 @@ void MiserereAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     // (3)/(4)'s delays are the effects themselves, not compensation delays
     // (see docs/adr/0003).
     setLatencySamples (engine.getLatencySamples());
+
+    // Issue #41: the bypass dry path. Everything it needs is allocated here,
+    // never in processBlock().
+    bypassDryDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    bypassDryDelay.prepare (spec);
+    bypassDryDelay.setDelay (static_cast<float> (juce::jlimit (0, maxLatencyCompensationSamples,
+                                                               getLatencySamples())));
+    bypassDryDelay.reset();
+
+    // Scratch for the untouched input, sized to the promised block size (at
+    // least one sample, so a degenerate prepareToPlay(rate, 0) still leaves
+    // a valid buffer behind) so processBlock() never resizes on the audio
+    // thread.
+    bypassDryBuffer.setSize (static_cast<int> (spec.numChannels), juce::jmax (1, samplesPerBlock));
+    bypassDryBuffer.clear();
+
+    // Primed to the CURRENT bypass state rather than always starting from
+    // "wet", so a session saved while bypassed - or a host that reads the
+    // bypass parameter before the first processBlock() - does not open with
+    // an audible ramp in from the wrong side.
+    bypassWetMix.reset (sampleRate, bypassCrossfadeDurationSeconds);
+    bypassWetMix.setCurrentAndTargetValue (bypassFlag->load (std::memory_order_relaxed) >= 0.5f ? 0.0f : 1.0f);
 }
 
 void MiserereAudioProcessor::releaseResources()
@@ -478,6 +510,15 @@ void MiserereAudioProcessor::releaseResources()
 void MiserereAudioProcessor::reset()
 {
     engine.reset();
+
+    // Issue #41: flush the dry delay line's history (a transport rewind must
+    // not replay pre-rewind audio into the bypass blend) and snap the
+    // crossfade to wherever it was heading, cancelling any ramp in flight -
+    // the same "stop cleanly, leave no stale motion behind" contract
+    // MiserereEngine::reset() gives every module above.
+    bypassDryDelay.reset();
+    bypassDryBuffer.clear();
+    bypassWetMix.setCurrentAndTargetValue (bypassWetMix.getTargetValue());
 }
 
 bool MiserereAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -531,8 +572,17 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     for (auto channel = mainNumInputChannels; channel < mainNumOutputChannels; ++channel)
         mainBuffer.clear (channel, 0, mainBuffer.getNumSamples());
 
-    if (bypassFlag->load (std::memory_order_relaxed) >= 0.5f)
-        return;
+    // Issue #41: bypass is a crossfade (bypassWetMix, advanced one step per
+    // sample in applyBypassCrossfade()) between the engine below - which
+    // keeps running unconditionally, bypassed or not, so none of its state
+    // (filter memory, envelope followers, both delay-line busses, the
+    // limiter's release) ever freezes - and a delayed copy of the untouched
+    // input. There is deliberately no early return here any more: freezing
+    // the engine while bypassed is exactly what made coming back OUT of
+    // bypass click, stale state resuming into a live signal, and the switch
+    // itself stepped by whatever the wet and dry signals happened to differ
+    // by at that instant.
+    bypassWetMix.setTargetValue (bypassFlag->load (std::memory_order_relaxed) >= 0.5f ? 0.0f : 1.0f);
 
     // Parameters are read once per host block (not per chunk): the engine's
     // smoothers spread any change across samples regardless.
@@ -564,14 +614,50 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     // but if one does, the buffer is processed in chunks of at most
     // preparedBlockSize so the engine's prepare()-sized buffers are never
     // indexed out of bounds - and no audio is dropped.
+    //
+    // Issue #41: the chunk is additionally capped to bypassDryBuffer's own
+    // prepared capacity, since the dry snapshot for a chunk has to fit in it
+    // and it is never resized on this thread.
+    const auto dryScratchCapacity = static_cast<size_t> (juce::jmax (1, bypassDryBuffer.getNumSamples()));
     const auto chunkLimit = preparedBlockSize > 0
-                                 ? static_cast<size_t> (preparedBlockSize)
-                                 : juce::jmax (static_cast<size_t> (1), fullBlock.getNumSamples());
+                                 ? juce::jmin (static_cast<size_t> (preparedBlockSize), dryScratchCapacity)
+                                 : juce::jmin (juce::jmax (static_cast<size_t> (1), fullBlock.getNumSamples()),
+                                               dryScratchCapacity);
 
     for (size_t offset = 0; offset < fullBlock.getNumSamples(); offset += chunkLimit)
     {
         const auto chunkLength = juce::jmin (chunkLimit, fullBlock.getNumSamples() - offset);
         auto chunk = fullBlock.getSubBlock (offset, chunkLength);
+        const auto chunkChannels = juce::jmin (chunk.getNumChannels(),
+                                               static_cast<size_t> (bypassDryBuffer.getNumChannels()));
+
+        // Issue #41: snapshot the untouched input before engine.process()
+        // mutates `chunk` (i.e. this region of the host's own buffer) in
+        // place with the wet signal.
+        //
+        // The snapshot is sanitised on the way in, exactly the way
+        // MiserereEngine's own final sum sanitises (docs/architecture.md's
+        // NaN/Inf policy: the output-side guarantee is unconditional). The
+        // dry path goes around the engine by definition, so it would
+        // otherwise be the one route by which a non-finite input sample
+        // reaches the output - and worse, a non-finite dry sample multiplied
+        // by a zero blend gain is NaN, so an unsanitised dry copy would
+        // poison the output even when bypass is fully disengaged. Cleaning
+        // here rather than after the blend also keeps bypassDryDelay's
+        // history finite, so a single bad input sample cannot echo back out
+        // of the delay line later.
+        auto dryChunk = juce::dsp::AudioBlock<float> (bypassDryBuffer)
+                             .getSubBlock (0, chunkLength)
+                             .getSubsetChannelBlock (0, chunkChannels);
+
+        for (size_t channel = 0; channel < chunkChannels; ++channel)
+        {
+            const auto* source = chunk.getChannelPointer (channel);
+            auto* destination = dryChunk.getChannelPointer (channel);
+
+            for (size_t sample = 0; sample < chunkLength; ++sample)
+                destination[sample] = std::isfinite (source[sample]) ? source[sample] : 0.0f;
+        }
 
         // The key is chunked in lockstep with the audio so a keyed detector
         // sees exactly the samples that belong to the chunk it is judging.
@@ -583,6 +669,39 @@ void MiserereAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         else
         {
             engine.process (chunk);
+        }
+
+        // Always run, never only while bypassed: the dry path has to stay
+        // time-aligned with the engine's latency at every instant, or the
+        // delay line's history would be stale the moment bypass toggles (see
+        // bypassDryDelay's docs in PluginProcessor.h).
+        bypassDryDelay.process (juce::dsp::ProcessContextReplacing<float> (dryChunk));
+
+        auto wetChunk = chunk.getSubsetChannelBlock (0, chunkChannels);
+        applyBypassCrossfade (juce::dsp::AudioBlock<const float> (dryChunk), wetChunk);
+    }
+}
+
+void MiserereAudioProcessor::applyBypassCrossfade (const juce::dsp::AudioBlock<const float>& dry,
+                                                   juce::dsp::AudioBlock<float>& wet) noexcept
+{
+    // Linear, not equal-power: the wet and dry signals here are two
+    // renderings of the same programme material and are strongly correlated
+    // (with a bit-transparent default direct path they are frequently
+    // near-identical), so an equal-power law would produce a measurable
+    // mid-fade level bump rather than a transparent blend.
+    const auto numChannels = wet.getNumChannels();
+    const auto numSamples = wet.getNumSamples();
+
+    for (size_t sample = 0; sample < numSamples; ++sample)
+    {
+        const auto wetGain = bypassWetMix.getNextValue();
+        const auto dryGain = 1.0f - wetGain;
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* wetData = wet.getChannelPointer (channel);
+            wetData[sample] = wetGain * wetData[sample] + dryGain * dry.getChannelPointer (channel)[sample];
         }
     }
 }

@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — bypass is click-free, latency-compensated and no longer freezes the chain (#41)
+
+`processBlock()` implemented bypass as an early return: the buffer was handed straight back
+and `MiserereEngine::process()` was never called at all. Three defects followed from that one
+line, and they are fixed together because they share a cause. The same defect and the same fix
+in the sibling plugin are basilica-audio/Crypta#87 / #90; this is a port of that architecture,
+including its naming.
+
+- **Click-free.** Bypass is now a continuous crossfade between the engine output and a copy of
+  the untouched input, driven by a `juce::SmoothedValue<float, Linear>` (`bypassWetMix`) reset
+  in `prepareToPlay()` to a fixed, **sample-rate-independent** 20 ms
+  (`bypassCrossfadeDurationSeconds`) — a time constant, not a sample count, because a bypass
+  toggle is a performance-time event. Measured sample-to-sample step at the switch, with all
+  four busses up (48 kHz, 110 Hz probe at 0.5): **0.518 → 0.0086 engaging**, **0.673 → 0.0076
+  disengaging**, against a steady-state slew of 0.0068–0.0072 at either endpoint. Both are now
+  inside the same 4×-own-slew bound every other transition in the suite is held to.
+- **The chain no longer freezes while bypassed.** `MiserereEngine::process()` now runs
+  unconditionally. Previously every module's state — filter memory, envelope followers, both
+  delay-line busses, the limiter's release — stopped dead the instant bypass engaged, which is
+  a second, independent click on the way back **out** (stale state resuming into a live signal)
+  and is why the post-bypass "steady state" was itself broken: the SPREAD/SLAP busses switched
+  back on abruptly as their emptied delay lines refilled, measuring a 0.353 max step where the
+  never-bypassed chain measures 0.0068. A state-continuity test (30 blocks bypassed mid-render,
+  moving envelope, compared against a never-bypassed reference) goes from **−1.9 dB to
+  numerical zero**.
+- **Latency-compensated by construction.** A new `bypassDryDelay`
+  (`juce::dsp::DelayLine`, `None` interpolation) delays the dry path by exactly
+  `getLatencySamples()`, armed in `prepareToPlay()` and kept running every block so its history
+  is never stale at a toggle. **Miserere reports 0 samples of latency at all times** (ADR-0003)
+  and measured 0 both before and after — a dirac lands at sample 0, matching the reported
+  figure — so unlike Crypta this half was never a live defect here. It is implemented anyway
+  because the invariant is "the dry path is delayed by exactly the reported latency", not "by
+  zero": the day any stage stops being zero-latency, bypass must not silently become a phase
+  error. A settled bypassed instance nulls against the latency-shifted dry signal at
+  **numerical zero**.
+- **NaN/Inf policy extended to the dry path.** The dry copy goes around the engine and
+  therefore around the engine's final-sum sanitiser, so it is sanitised on capture (before the
+  delay line, so nothing non-finite can be echoed back out later). Without it a non-finite
+  input multiplied by a zero blend gain is NaN, which would have poisoned the output even with
+  bypass fully disengaged. Bypassed non-finite input is now cleaned too, where the early return
+  used to hand it straight back to the host.
+- Real-time safety unchanged: **0 heap allocations** measured across 40 mid-stream bypass
+  toggles; every buffer and the delay line are allocated in `prepareToPlay()`.
+- New tests: `tests/BypassTests.cpp` (7 cases — click bounds on engage/disengage, reported
+  latency stable across the toggle, dirac latency, null test against the delayed dry copy,
+  non-finite input on the dry path, engine-state continuity) and a bypass-toggle allocation
+  case in `tests/AllocationGuardTests.cpp`. Catch2 suite: 233 → 241 cases.
+
 ## [0.7.0] — 2026-08-20
 
 Three additions that each defend the same invariant. The chain gains an optional external
