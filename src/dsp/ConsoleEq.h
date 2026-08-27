@@ -104,6 +104,15 @@ private:
 
     static constexpr float neutralGainEpsilonDb = 1.0e-3f;
 
+    // Rest-flush threshold (issue #46): the exact value juce_dsp's own
+    // per-block snapToZero() pass used (JUCE_SNAP_TO_ZERO,
+    // juce_FloatVectorOperations.h, JUCE 8.0.14) before the fleet disabled
+    // JUCE_DSP_ENABLE_SNAP_TO_ZERO. -160 dBFS: genuine musical HPF/shelf
+    // tails decay through it within ~100 ms of digital silence, and the
+    // parked x86 fixed-point residue this guards against (~1e-34, see
+    // process()) sits 25 orders of magnitude below it.
+    static constexpr float restFlushThreshold = 1.0e-8f;
+
     using Duplicator = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>>;
 
     double sampleRate = 44100.0;
