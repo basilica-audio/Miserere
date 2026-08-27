@@ -291,7 +291,7 @@ box (see `presets.md` for what each one is for) — including **Tape Slap 7.5** 
 Slap**, added in v0.5.0 to exercise Wobble and Age, and **BV Mode**, a
 background/stacked-vocal starting point with every return pushed harder than the lead
 template; user presets save to
-`~/Library/Audio/Presets/Yves Vogl/Miserere/` on macOS (`%APPDATA%/Yves Vogl/Miserere/Presets/`
+`~/Library/Audio/Presets/Basilica Audio/Miserere/` on macOS (`%APPDATA%/Basilica Audio/Miserere/Presets/`
 on Windows). The preset menu's "Set current as default" makes any preset — factory or user —
 load automatically on every fresh instance; "Import..." accepts both single preset files and
 zip preset banks.

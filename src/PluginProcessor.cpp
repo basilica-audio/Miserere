@@ -89,12 +89,17 @@ namespace
         basilica::presets::PresetManagerConfig config;
         config.pluginId = JUCE_STRINGIFY (JucePlugin_CFBundleIdentifier);
         config.pluginName = JucePlugin_Name;
-        config.manufacturerName = "Yves Vogl";
+        config.manufacturerName = "Basilica Audio";
+        // Presets saved before the suite adopted its trading name still live
+        // under the old folder. PresetManager copies them across on first
+        // construction - copies, never moves, so an older build still finds
+        // its own. See docs/branding.md.
+        config.legacyManufacturerName = "Yves Vogl";
         config.pluginVersion = JucePlugin_VersionString;
         // userPresetsDirectoryOverrideForTests intentionally left
         // default-constructed (empty) - production instances always use the
         // real platform-standard preset location (see PresetManager.h):
-        // ~/Library/Audio/Presets/Yves Vogl/Miserere/ on macOS.
+        // ~/Library/Audio/Presets/Basilica Audio/Miserere/ on macOS.
         return config;
     }
 
