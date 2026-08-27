@@ -47,6 +47,10 @@ juce_add_plugin(Miserere
     PLUGIN_CODE Msrr
     FORMATS AU VST3 Standalone
     PRODUCT_NAME "Miserere"
+    COMPANY_WEBSITE "https://basilica-audio.github.io/website/"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 Yves Vogl"
+    DESCRIPTION "Parallel vocal chain: a direct path plus four blendable return busses"
+    VST3_CATEGORIES Fx Dynamics
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
