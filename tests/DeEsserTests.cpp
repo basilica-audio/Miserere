@@ -65,6 +65,12 @@ TEST_CASE ("De-esser: 1 kHz content untouched (+-0.5 dB) at the same heavy setti
 
     const auto gainChangeDb = measureGainChangeDb (deEsser, 1000.0, 0.5f);
 
+    // Derived worst-case bound: out = x + bp * (g - 1), so a probe leaks
+    // through the detector bandpass (RBJ BPF, f0 = 8 kHz, Q = 2) with
+    // |H(1 kHz)| = 1/sqrt(1 + Q^2*(W - 1/W)^2) = 0.063, and the clamp caps
+    // the reduction at -10 dB (g >= 0.316). Ignoring phase (the leak is
+    // actually near quadrature), |delta| <= -20*log10(1 - 0.063 * 0.684)
+    // = 0.39 dB. 0.5 covers that worst case.
     CHECK (gainChangeDb == Catch::Approx (0.0).margin (0.5));
 }
 

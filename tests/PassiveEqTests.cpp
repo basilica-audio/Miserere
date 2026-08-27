@@ -357,6 +357,10 @@ TEST_CASE ("Passive EQ: sharp-vs-broad HF bell peak-gain delta is 9 +- 1.5 dB at
 
     const auto delta = sharpPeak - broadPeak;
     INFO ("sharp peak = " << sharpPeak << " dB, broad peak = " << broadPeak << " dB, delta = " << delta);
+    // 9 +- 1.5 dB is the section 6.3 voicing claim itself (header above):
+    // the EQP bandwidth pot's series resistance costs the sharp-vs-broad
+    // bell ~9 dB of peak gain. The band is the claim under test - the
+    // measurement is deterministic and repeats to the float noise floor.
     CHECK (delta == Catch::Approx (9.0).margin (1.5));
 }
 

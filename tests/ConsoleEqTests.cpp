@@ -56,7 +56,13 @@ TEST_CASE ("Console EQ: HPF at 18 dB/oct attenuates roughly 18 dB per octave bel
     const auto twoOctavesBelow = measureGainChangeDb (eq, 40.0);
 
     const auto slopePerOctave = oneOctaveBelow - twoOctavesBelow;
-    CHECK (slopePerOctave == Catch::Approx (18.0).margin (4.0));
+
+    // Derived: the cascade (1st-order HP x 2nd-order Butterworth HP, same
+    // fc) has |H|^2 = W^2/(1+W^2) * W^4/(1+W^4); evaluated one vs two
+    // octaves below cutoff the transition-band slope is analytically
+    // 17.11 dB/oct - 0.89 below the asymptotic 18. 1.5 covers that offset
+    // plus the sub-0.05 dB measurement floor.
+    CHECK (slopePerOctave == Catch::Approx (18.0).margin (1.5));
 }
 
 TEST_CASE ("Console EQ: HPF disabled is a bit-exact bypass", "[dsp][consoleeq][null]")
@@ -107,6 +113,12 @@ TEST_CASE ("Console EQ: low shelf boosts low frequencies by roughly its gain set
     eq.setLowGainDb (10.0f);
 
     const auto gainDb = measureGainChangeDb (eq, 40.0);
+
+    // Derived: the shallow shelf (RBJ low shelf, Q = 0.5) has not reached
+    // its plateau one and a half octaves below the 110 Hz corner -
+    // analytically |H(40 Hz)| = 8.79 dB at 48 kHz, 1.21 below the dialed
+    // 10 dB. 1.5 covers that transition-band offset plus the measurement
+    // floor.
     CHECK (gainDb == Catch::Approx (10.0).margin (1.5));
 }
 
@@ -119,7 +131,11 @@ TEST_CASE ("Console EQ: mid bell boosts at its selected centre frequency", "[dsp
     const auto atCentre = measureGainChangeDb (eq, 1600.0);
     const auto farAway = measureGainChangeDb (eq, 100.0);
 
-    CHECK (atCentre == Catch::Approx (12.0).margin (1.0));
+    // Derived: an RBJ peak filter's gain at its own (digital) centre is
+    // exactly A^2 = 12.00 dB by construction - no warping term, since the
+    // design is anchored at w0. What remains is the float coefficient/state
+    // noise and the finite-window RMS floor, both far below 0.05 dB.
+    CHECK (atCentre == Catch::Approx (12.0).margin (0.05));
     CHECK (std::abs (farAway) < 1.5);
 }
 
@@ -180,6 +196,11 @@ TEST_CASE ("Console EQ: matched 12 kHz shelf tracks the analog prototype at 20 k
         TestHelpers::tailRms (processed, settleSamples) / TestHelpers::tailRms (reference, settleSamples));
 
     INFO ("measured " << measuredDb << " dB at 20 kHz, analog target " << analogTargetDb << " dB");
+
+    // +-1 dB is the decramping design claim itself (section 6.2 header):
+    // the matched shelf tracks the analog prototype in the top octave to
+    // within 1 dB, where the bilinear/RBJ shelf visibly overshoots. The
+    // margin is the claim under test, not a measurement allowance.
     CHECK (measuredDb == Catch::Approx (analogTargetDb).margin (1.0));
 }
 

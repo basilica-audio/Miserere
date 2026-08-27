@@ -96,6 +96,11 @@ TEST_CASE ("Spread: L is pitched up and R is pitched down by ~the configured det
     INFO ("left peak = " << leftPeakHz << " Hz (expected ~" << expectedUpHz << "), right peak = "
                           << rightPeakHz << " Hz (expected ~" << expectedDownHz << ")");
 
+    // Derived: the 65536-point FFT at 48 kHz has 0.732 Hz bins; parabolic
+    // interpolation on a rectangular-window magnitude is good to ~0.3 bin,
+    // and the grain-crossfade AM (traversal rate ~0.15 Hz at 15 cents) can
+    // pull the fitted peak by up to a further bin under unlucky phase.
+    // 3 Hz = 4 bins bounds that budget with ~2x headroom.
     CHECK (leftPeakHz == Catch::Approx (expectedUpHz).margin (3.0));
     CHECK (rightPeakHz == Catch::Approx (expectedDownHz).margin (3.0));
     CHECK (leftPeakHz > rightPeakHz);
@@ -139,8 +144,12 @@ TEST_CASE ("Spread: base delays are approximately 30 ms (up voice) and 50 ms (do
     const auto expectedUpSamples = static_cast<int> (std::round (0.030 * testSampleRate));
     const auto expectedDownSamples = static_cast<int> (std::round (0.050 * testSampleRate));
 
-    CHECK (leftPeakIndex == Catch::Approx (expectedUpSamples).margin (4));
-    CHECK (rightPeakIndex == Catch::Approx (expectedDownSamples).margin (4));
+    // Derived: at detune 0 the full-gain tap sits at the base delay, whose
+    // float value is within one ULP of the exact integer sample count; the
+    // Lagrange3rd interpolator spreads the impulse over its 4-sample
+    // kernel, so the |peak| lies within +-2 samples of the exact delay.
+    CHECK (leftPeakIndex == Catch::Approx (expectedUpSamples).margin (2));
+    CHECK (rightPeakIndex == Catch::Approx (expectedDownSamples).margin (2));
 }
 
 TEST_CASE ("Spread: time scale stretches both base delays proportionally", "[dsp][spread][timing]")
@@ -172,7 +181,9 @@ TEST_CASE ("Spread: time scale stretches both base delays proportionally", "[dsp
     }
 
     const auto expectedSamples = static_cast<int> (std::round (0.060 * testSampleRate));
-    CHECK (leftPeakIndex == Catch::Approx (expectedSamples).margin (4));
+    // Same +-2 bound as above: base delay within one ULP of the exact
+    // integer, Lagrange3rd kernel spans 4 samples.
+    CHECK (leftPeakIndex == Catch::Approx (expectedSamples).margin (2));
 }
 
 TEST_CASE ("Spread: width 0 centres both voices (L == R); width 1 keeps them hard-panned (L != R)", "[dsp][spread][width]")

@@ -60,7 +60,7 @@ namespace
     }
 }
 
-TEST_CASE ("Direct FET: static curve at 4:1 within +-1.5 dB", "[dsp][fet][static-curve]")
+TEST_CASE ("Direct FET: static curve at 4:1 within +-0.3 dB", "[dsp][fet][static-curve]")
 {
     FetCompressor comp;
     comp.setRatio (4.0f);
@@ -72,10 +72,18 @@ TEST_CASE ("Direct FET: static curve at 4:1 within +-1.5 dB", "[dsp][fet][static
     const auto measured = measureGainChangeDb (comp, 1000.0, 0.5f);
     const auto expected = -expectedGainReductionDb (0.5f, -30.0f, 4.0f);
 
-    CHECK (measured == Catch::Approx (expected).margin (1.5));
+    // Derived model-error bound: the squared-signal envelope under-reads the
+    // sine's true peak. Fixed-point of the attack/release balance (attack
+    // tau_a = 1 ms, release tau_r = 100 ms, ripple period T = 0.5 ms at
+    // 1 kHz): d = dr * e^-k / (1 - e^-k) <= dr / k with dr <= A^2 * T/tau_r
+    // and k = 2*sqrt(d/A^2) / (w*tau_a), giving (d/A^2)^1.5 <= w*tau_a*T /
+    // (2*tau_r) => under-read <= 0.28 dB, so the measured curve can sit at
+    // most 0.28 * (1 - 1/ratio) ~ 0.25 dB above the peak-based model (and
+    // never below it). Simulated actual: +0.16 dB (4:1) / +0.19 dB (8:1).
+    CHECK (measured == Catch::Approx (expected).margin (0.3));
 }
 
-TEST_CASE ("Direct FET: static curve at 8:1 within +-1.5 dB", "[dsp][fet][static-curve]")
+TEST_CASE ("Direct FET: static curve at 8:1 within +-0.3 dB", "[dsp][fet][static-curve]")
 {
     FetCompressor comp;
     comp.setRatio (8.0f);
@@ -87,7 +95,9 @@ TEST_CASE ("Direct FET: static curve at 8:1 within +-1.5 dB", "[dsp][fet][static
     const auto measured = measureGainChangeDb (comp, 1000.0, 0.5f);
     const auto expected = -expectedGainReductionDb (0.5f, -30.0f, 8.0f);
 
-    CHECK (measured == Catch::Approx (expected).margin (1.5));
+    // Same derived bound as the 4:1 case above: model error in [0, 0.28 dB]
+    // scaled by (1 - 1/8), simulated actual +0.19 dB.
+    CHECK (measured == Catch::Approx (expected).margin (0.3));
 }
 
 TEST_CASE ("Direct FET: GR metering value matches the measured static reduction", "[dsp][fet][metering]")
@@ -101,7 +111,13 @@ TEST_CASE ("Direct FET: GR metering value matches the measured static reduction"
     const auto measured = measureGainChangeDb (comp, 1000.0, 0.5f);
 
     CHECK (comp.getCurrentGainReductionDb() > 0.0f);
-    CHECK (static_cast<double> (comp.getCurrentGainReductionDb()) == Catch::Approx (-measured).margin (2.0));
+    // Derived: the meter publishes the block's PEAK reduction; the one-pole
+    // envelope converges monotonically from below, so that peak is the
+    // settled ripple-band top, while -measured is the RMS-weighted band
+    // average. Their gap is bounded by the band width, i.e. the release
+    // decay across one ripple period: 10*log10(e) * 0.5 ms / 100 ms
+    // ~ 0.022 dB. 0.1 covers it with 4x headroom (simulated gap: 0.004 dB).
+    CHECK (static_cast<double> (comp.getCurrentGainReductionDb()) == Catch::Approx (-measured).margin (0.1));
 }
 
 TEST_CASE ("Direct FET: threshold at maximum (0 dB) is a bit-exact identity", "[dsp][fet][null]")

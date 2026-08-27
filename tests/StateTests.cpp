@@ -301,7 +301,10 @@ TEST_CASE ("State schema: re-save stamps stateVersion = 4; round-trip is lossles
     CHECK (realValue (ParamIDs::slapWobble) == Catch::Approx (35.0f).margin (0.1f));
     CHECK (realValue (ParamIDs::slapAge) == Catch::Approx (55.0f).margin (0.1f));
     CHECK (realValue (ParamIDs::limiterCeiling) == Catch::Approx (-2.5f).margin (0.01f));
-    CHECK (realValue (ParamIDs::limiterRelease) == Catch::Approx (120.0f).margin (0.5f));
+    // limiterRelease is makeLogRange (5, 500): the restore round-trips
+    // through mapFromLog10 -> mapToLog10 in float, bounded by
+    // V * ln (500/5) * 8 ULPs * eps_f32 = 120 * 4.6 * 9.5e-7 < 6e-4 ms.
+    CHECK (realValue (ParamIDs::limiterRelease) == Catch::Approx (120.0f).margin (0.01f));
     CHECK (limiterEnabled->getValue() >= 0.5f);
 }
 

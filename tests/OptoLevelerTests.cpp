@@ -349,6 +349,12 @@ TEST_CASE ("Opto: static curve stays within +-1.5 dB of the v0.4.0 golden curve 
         const auto gr = driveToSettledGr (opto, amplitude, 6.0);
 
         INFO ("level " << point.levelDb << " dBFS: GR = " << gr << " dB, golden = " << point.goldenGrDb << " dB");
+        // +-1.5 dB is the guardrail's own voicing-drift budget (see the 6.5e
+        // section header above), a policy allowance for deliberate small
+        // re-voicings and cross-platform float differences - not a
+        // measurement tolerance. The measurement itself is deterministic;
+        // tightening it to the repeatability floor would turn every
+        // FP-level refactor into a golden re-capture.
         CHECK (gr == Catch::Approx (point.goldenGrDb).margin (1.5));
     }
 }
