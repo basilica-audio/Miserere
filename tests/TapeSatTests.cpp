@@ -73,7 +73,7 @@ TEST_CASE ("Tape sat: driven output is genuinely nonlinear (adds harmonic conten
     CHECK (processedCrest < juce::MathConstants<float>::sqrt2 * 0.98f);
 }
 
-TEST_CASE ("Tape sat: auto-compensation keeps a nominal-level signal within +-3 dB across the drive range", "[dsp][tapesat][compensation]")
+TEST_CASE ("Tape sat: auto-compensation keeps a nominal-level signal within +-1.5 dB across the drive range", "[dsp][tapesat][compensation]")
 {
     for (const auto driveDb : { 3.0f, 6.0f, 12.0f, 18.0f, 24.0f })
     {
@@ -98,7 +98,12 @@ TEST_CASE ("Tape sat: auto-compensation keeps a nominal-level signal within +-3 
         const auto outputRms = TestHelpers::tailRms (processed, settleSamples);
 
         REQUIRE (inputRms > 0.0);
-        CHECK (juce::Decibels::gainToDecibels (outputRms / inputRms) == Catch::Approx (0.0).margin (3.0));
+        // Derived: comp(g) = a / tanh(g*a) anchors unity at the nominal
+        // level's instantaneous slope; on a sine the residual is the RMS of
+        // tanh(g*a*sin) * comp(g) vs a*sin, computed exactly per drive:
+        // +0.02 (3 dB), +0.04 (6), +0.17 (12), +0.57 (18), +1.40 (24 dB).
+        // Max 1.41 dB; 1.5 covers the whole range.
+        CHECK (juce::Decibels::gainToDecibels (outputRms / inputRms) == Catch::Approx (0.0).margin (1.5));
     }
 }
 
