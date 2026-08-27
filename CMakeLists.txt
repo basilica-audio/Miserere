@@ -80,12 +80,25 @@ juce_add_binary_data(MiserereBinaryData SOURCES
     presets/factory/wornSlap.json
     presets/factory/bvMode.json
     resources/i18n/de.txt
-    # Suite typography (M3 vector editor, issue #25): EB Garamond, OFL
-    # licensed (resources/fonts/OFL-EBGaramond.txt) - consumed by
-    # src/gui/BasilicaLookAndFeel.cpp as the single source of every glyph
-    # the fully JUCE-drawn editor renders.
+    # Suite typography: EB Garamond, OFL licensed
+    # (resources/fonts/OFL-EBGaramond.txt) - consumed by
+    # src/gui/PlateTypography.h as the single source of every glyph the
+    # wave-3 composited editor letters live over the plate.
     resources/fonts/EBGaramond-Regular.ttf
     resources/fonts/EBGaramond-SemiBold.ttf
+    # Wave-3 photoreal "composited plate" GUI (see src/PluginEditor.h): the
+    # approved empty master plate, the suite control sprites
+    # (feathered-alpha crops from approved master renders - provenance in
+    # the gui-pipeline scaffold's sprite-library/provenance.md, incl. the
+    # D3 fader track/cap pair), and the layout manifest that maps every
+    # parameter id to a sprite type + plate position.
+    resources/gui/plate_miserere.png
+    resources/gui/sprite_knob.png
+    resources/gui/sprite_toggle_up.png
+    resources/gui/sprite_gr_dial.png
+    resources/gui/sprite_fader_track.png
+    resources/gui/sprite_fader_cap.png
+    resources/gui/layout-manifest.json
 )
 
 # ==============================================================================
@@ -169,6 +182,10 @@ target_compile_definitions(Tests PRIVATE
     # Checked-in test assets (e.g. the v0.4.0 state-migration fixture,
     # tests/fixtures/state_v0_4_0.xml - see StateTests.cpp).
     MSRR_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    # tests/gui/EditorSnapshotTests.cpp regenerates docs/gui-preview.png
+    # from the real editor draw chain (suite proof-chain rule) - it needs
+    # the repository root to land the file next to the docs it documents.
+    MSRR_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)

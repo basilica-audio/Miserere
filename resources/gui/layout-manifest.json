@@ -1,0 +1,795 @@
+{
+ "family": "basilica-wave3-composited-plate",
+ "plate": {
+  "binary": "plate_miserere_png",
+  "width1x": 1264,
+  "height1x": 848
+ },
+ "sprites": {
+  "knob": {
+   "binary": "sprite_knob_png",
+   "width": 160,
+   "height": 160,
+   "knobCx": 80,
+   "knobCy": 80,
+   "knobRadius": 63
+  },
+  "selector": {
+   "binary": "sprite_knob_png",
+   "width": 160,
+   "height": 160,
+   "knobCx": 80,
+   "knobCy": 80,
+   "knobRadius": 63
+  },
+  "toggle": {
+   "binary": "sprite_toggle_up_png",
+   "width": 117,
+   "height": 129
+  },
+  "gr": {
+   "binary": "sprite_gr_dial_png",
+   "width": 332,
+   "height": 332,
+   "contentDiameter": 300,
+   "pivotXFrac": 0.5,
+   "pivotYFrac": 0.64,
+   "needleLengthFrac": 0.3
+  },
+  "faderTrack": {
+   "binary": "sprite_fader_track_png",
+   "width": 104,
+   "height": 269,
+   "capX": 30,
+   "capY": 102,
+   "capW": 46,
+   "capH": 56,
+   "travelTopY": 68,
+   "travelBottomY": 210,
+   "slotCx": 53,
+   "visibleWidth": 64
+  },
+  "faderCap": {
+   "binary": "sprite_fader_cap_png",
+   "width": 74,
+   "height": 88
+  }
+ },
+ "grTicks": [
+  [
+   -20,
+   -48.0
+  ],
+  [
+   -10,
+   -26.0
+  ],
+  [
+   -6,
+   -8.0
+  ],
+  [
+   -3,
+   14.0
+  ],
+  [
+   0,
+   46.0
+  ]
+ ],
+ "controls": [
+  {
+   "id": "bypass",
+   "type": "toggle",
+   "label": "BYPASS",
+   "cx": 452,
+   "cy": 168,
+   "size": 32
+  },
+  {
+   "id": "in_trim",
+   "type": "knob",
+   "label": "IN TRIM",
+   "cx": 522,
+   "cy": 168,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "parallel_trim",
+   "type": "knob",
+   "label": "PARALLEL",
+   "cx": 632,
+   "cy": 168,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "out_trim",
+   "type": "knob",
+   "label": "OUT TRIM",
+   "cx": 742,
+   "cy": 168,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "link",
+   "type": "toggle",
+   "label": "LINK",
+   "cx": 812,
+   "cy": 168,
+   "size": 32
+  },
+  {
+   "id": "meter_directFetGr",
+   "type": "gr",
+   "label": "CHANNEL",
+   "cx": 240,
+   "cy": 190,
+   "size": 120,
+   "tap": "directFetGr"
+  },
+  {
+   "id": "meter_busGr",
+   "type": "gr",
+   "label": "BUS",
+   "cx": 1024,
+   "cy": 190,
+   "size": 120,
+   "tap": "busGr"
+  },
+  {
+   "id": "direct_deessPre_enabled",
+   "type": "toggle",
+   "label": "DE-ESS",
+   "cx": 263,
+   "cy": 298,
+   "size": 30
+  },
+  {
+   "id": "direct_deessPre_freq",
+   "type": "knob",
+   "label": "DS FREQ",
+   "cx": 345,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_deessPre_threshold",
+   "type": "knob",
+   "label": "DS THRES",
+   "cx": 427,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_fet_enabled",
+   "type": "toggle",
+   "label": "FET",
+   "cx": 509,
+   "cy": 298,
+   "size": 30
+  },
+  {
+   "id": "direct_fet_threshold",
+   "type": "knob",
+   "label": "THRESHOLD",
+   "cx": 591,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_fet_attack",
+   "type": "knob",
+   "label": "ATTACK",
+   "cx": 673,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_fet_release",
+   "type": "knob",
+   "label": "RELEASE",
+   "cx": 755,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_fet_makeup",
+   "type": "knob",
+   "label": "MAKEUP",
+   "cx": 837,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_hpfEnabled",
+   "type": "toggle",
+   "label": "HPF",
+   "cx": 919,
+   "cy": 298,
+   "size": 30
+  },
+  {
+   "id": "direct_eq_hpfFreq",
+   "type": "selector",
+   "label": "HPF FREQ",
+   "cx": 1001,
+   "cy": 298,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_lowFreq",
+   "type": "selector",
+   "label": "LOW FREQ",
+   "cx": 263,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_lowGain",
+   "type": "knob",
+   "label": "LOW GAIN",
+   "cx": 345,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_midFreq",
+   "type": "selector",
+   "label": "MID FREQ",
+   "cx": 427,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_midGain",
+   "type": "knob",
+   "label": "MID GAIN",
+   "cx": 509,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_highGain",
+   "type": "knob",
+   "label": "HIGH GAIN",
+   "cx": 591,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_eq_drive",
+   "type": "knob",
+   "label": "EQ DRIVE",
+   "cx": 673,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_sat_drive",
+   "type": "knob",
+   "label": "SATURATE",
+   "cx": 755,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_deessPost_enabled",
+   "type": "toggle",
+   "label": "DE-ESS",
+   "cx": 837,
+   "cy": 366,
+   "size": 30
+  },
+  {
+   "id": "direct_deessPost_freq",
+   "type": "knob",
+   "label": "DS FREQ",
+   "cx": 919,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "direct_deessPost_threshold",
+   "type": "knob",
+   "label": "DS THRES",
+   "cx": 1001,
+   "cy": 366,
+   "size": 46,
+   "sweep": 270
+  },
+  {
+   "id": "crush_input",
+   "type": "knob",
+   "label": "INPUT",
+   "cx": 334,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_ratio",
+   "type": "selector",
+   "label": "RATIO",
+   "cx": 388,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_style",
+   "type": "selector",
+   "label": "STYLE",
+   "cx": 334,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_attack",
+   "type": "knob",
+   "label": "ATTACK",
+   "cx": 388,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_release",
+   "type": "knob",
+   "label": "RELEASE",
+   "cx": 334,
+   "cy": 586,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_output",
+   "type": "knob",
+   "label": "OUTPUT",
+   "cx": 388,
+   "cy": 586,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "crush_level",
+   "type": "fader",
+   "label": "LEVEL",
+   "cx": 432,
+   "cy": 560,
+   "size": 200
+  },
+  {
+   "id": "crush_mute",
+   "type": "toggle",
+   "label": "MUTE",
+   "cx": 418,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "crush_audition",
+   "type": "toggle",
+   "label": "AUD",
+   "cx": 450,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "sand_pre_lfFreq",
+   "type": "selector",
+   "label": "LF FREQ",
+   "cx": 482,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_lfBoost",
+   "type": "knob",
+   "label": "BOOST",
+   "cx": 534,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_lfCut",
+   "type": "knob",
+   "label": "LF CUT",
+   "cx": 586,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_hfBellFreq",
+   "type": "selector",
+   "label": "HF FREQ",
+   "cx": 638,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_hfBellBoost",
+   "type": "knob",
+   "label": "BOOST",
+   "cx": 482,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_hfBellBandwidth",
+   "type": "knob",
+   "label": "WIDTH",
+   "cx": 534,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_hfShelfFreq",
+   "type": "selector",
+   "label": "SHELF",
+   "cx": 586,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_pre_hfShelfAtten",
+   "type": "knob",
+   "label": "ATTEN",
+   "cx": 638,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_peakred",
+   "type": "knob",
+   "label": "PEAK RED",
+   "cx": 482,
+   "cy": 586,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_limit",
+   "type": "toggle",
+   "label": "LIMIT",
+   "cx": 534,
+   "cy": 586,
+   "size": 26
+  },
+  {
+   "id": "sand_residual",
+   "type": "toggle",
+   "label": "RESIDUAL",
+   "cx": 586,
+   "cy": 586,
+   "size": 26
+  },
+  {
+   "id": "sand_emphasis",
+   "type": "knob",
+   "label": "EMPHASIS",
+   "cx": 638,
+   "cy": 586,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_lfFreq",
+   "type": "selector",
+   "label": "LF FREQ",
+   "cx": 482,
+   "cy": 644,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_lfBoost",
+   "type": "knob",
+   "label": "BOOST",
+   "cx": 534,
+   "cy": 644,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_lfCut",
+   "type": "knob",
+   "label": "LF CUT",
+   "cx": 586,
+   "cy": 644,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_hfBellFreq",
+   "type": "selector",
+   "label": "HF FREQ",
+   "cx": 638,
+   "cy": 644,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_hfBellBoost",
+   "type": "knob",
+   "label": "BOOST",
+   "cx": 482,
+   "cy": 702,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_hfBellBandwidth",
+   "type": "knob",
+   "label": "WIDTH",
+   "cx": 534,
+   "cy": 702,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_hfShelfFreq",
+   "type": "selector",
+   "label": "SHELF",
+   "cx": 586,
+   "cy": 702,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_post_hfShelfAtten",
+   "type": "knob",
+   "label": "ATTEN",
+   "cx": 638,
+   "cy": 702,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "sand_level",
+   "type": "fader",
+   "label": "LEVEL",
+   "cx": 682,
+   "cy": 560,
+   "size": 200
+  },
+  {
+   "id": "sand_mute",
+   "type": "toggle",
+   "label": "MUTE",
+   "cx": 666,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "sand_audition",
+   "type": "toggle",
+   "label": "AUD",
+   "cx": 698,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "spread_detune",
+   "type": "knob",
+   "label": "DETUNE",
+   "cx": 744,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "spread_time",
+   "type": "knob",
+   "label": "TIME",
+   "cx": 744,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "spread_width",
+   "type": "knob",
+   "label": "WIDTH",
+   "cx": 744,
+   "cy": 586,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "spread_level",
+   "type": "fader",
+   "label": "LEVEL",
+   "cx": 794,
+   "cy": 560,
+   "size": 200
+  },
+  {
+   "id": "spread_mute",
+   "type": "toggle",
+   "label": "MUTE",
+   "cx": 778,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "spread_audition",
+   "type": "toggle",
+   "label": "AUD",
+   "cx": 810,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "slap_time",
+   "type": "knob",
+   "label": "TIME",
+   "cx": 852,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "slap_tone",
+   "type": "knob",
+   "label": "TONE",
+   "cx": 906,
+   "cy": 470,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "slap_wobble",
+   "type": "knob",
+   "label": "WOBBLE",
+   "cx": 852,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "slap_age",
+   "type": "knob",
+   "label": "AGE",
+   "cx": 906,
+   "cy": 528,
+   "size": 38,
+   "sweep": 270
+  },
+  {
+   "id": "slap_stereo",
+   "type": "toggle",
+   "label": "STEREO",
+   "cx": 852,
+   "cy": 586,
+   "size": 26
+  },
+  {
+   "id": "slap_level",
+   "type": "fader",
+   "label": "LEVEL",
+   "cx": 946,
+   "cy": 560,
+   "size": 200
+  },
+  {
+   "id": "slap_mute",
+   "type": "toggle",
+   "label": "MUTE",
+   "cx": 930,
+   "cy": 690,
+   "size": 26
+  },
+  {
+   "id": "slap_audition",
+   "type": "toggle",
+   "label": "AUD",
+   "cx": 962,
+   "cy": 690,
+   "size": 26
+  }
+ ],
+ "labels": [
+  {
+   "text": "MISERERE",
+   "cx": 632,
+   "cy": 100,
+   "h": 30,
+   "style": "wordmark"
+  },
+  {
+   "text": "BASILICA AUDIO",
+   "cx": 632,
+   "cy": 126,
+   "h": 11,
+   "style": "caption"
+  },
+  {
+   "text": "DIRECT PATH",
+   "cx": 632,
+   "cy": 246,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "CRUSH",
+   "cx": 379,
+   "cy": 442,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "SANDWICH",
+   "cx": 582,
+   "cy": 442,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "SPREAD",
+   "cx": 764,
+   "cy": 442,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "SLAP",
+   "cx": 896,
+   "cy": 442,
+   "h": 13,
+   "style": "section"
+  }
+ ],
+ "rules": [
+  {
+   "x1": 458,
+   "y1": 452,
+   "x2": 458,
+   "y2": 750
+  },
+  {
+   "x1": 706,
+   "y1": 452,
+   "x2": 706,
+   "y2": 750
+  },
+  {
+   "x1": 822,
+   "y1": 452,
+   "x2": 822,
+   "y2": 750
+  },
+  {
+   "x1": 300,
+   "y1": 424,
+   "x2": 970,
+   "y2": 424
+  }
+ ]
+}
