@@ -161,6 +161,38 @@ void ConsoleEq::process (juce::dsp::AudioBlock<float>& block) noexcept
     const auto highGainDb = highGainSmoothed.skip (static_cast<int> (numSamples));
     const auto driveDb = juce::jmax (0.0f, driveDbSmoothed.skip (static_cast<int> (numSamples)));
 
+    // Exact-zero rest guarantee (issue #46): with the fleet-wide
+    // JUCE_DSP_ENABLE_SNAP_TO_ZERO=0, juce_dsp no longer snaps filter state
+    // to zero each block, and on x86 (separate mul/add rounding, FTZ) the
+    // HPF cascade's transposed-direct-form-II state parks on a rounding
+    // fixed point: for a highpass, the state's per-sample decay term is
+    // proportional to H(1) = 1 + a1 + a2 ~ 0, which underflows and is
+    // flushed to zero by FTZ, so the state - and a constant ~1e-34 DC
+    // output - survives silence indefinitely (arm64's fused mul-add rounds
+    // the same recursion down to zero; measured in
+    // tests/RobustnessTests.cpp, "a long silence decays to rest").
+    // The flush below restores exactly what the library pass provided,
+    // scoped to this module and off the hot path: it can only trigger on a
+    // block of pure digital silence whose processed residue is already
+    // below the library's own snap threshold. The scan short-circuits at
+    // the first non-zero input sample, so it costs nothing while programme
+    // material is playing.
+    bool inputIsSilent = true;
+
+    for (size_t channel = 0; channel < numChannels && inputIsSilent; ++channel)
+    {
+        const auto* data = block.getChannelPointer (channel);
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+        {
+            if (data[sample] != 0.0f)
+            {
+                inputIsSilent = false;
+                break;
+            }
+        }
+    }
+
     juce::dsp::ProcessContextReplacing<float> context (block);
 
     // Bit-exact bypass while disabled - see the class comment (a highpass
@@ -254,6 +286,31 @@ void ConsoleEq::process (juce::dsp::AudioBlock<float>& block) noexcept
 
                 data[sample] = odd.processSample (x) + ironAmount * static_cast<float> (diffOut);
             }
+        }
+    }
+
+    // Issue #46 rest flush (rationale above): the input block was pure
+    // digital silence, so anything left at the output is this module's own
+    // decaying (or parked) state. Once that residue falls below the
+    // threshold juce_dsp itself used to snap at, flush every recursive
+    // state and the residue with it. While any section is still ringing
+    // audibly (residue >= threshold) the natural decay is left untouched.
+    if (inputIsSilent)
+    {
+        auto residue = 0.0f;
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            const auto* data = block.getChannelPointer (channel);
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+                residue = juce::jmax (residue, std::abs (data[sample]));
+        }
+
+        if (residue < restFlushThreshold)
+        {
+            reset();
+            block.clear();
         }
     }
 }
